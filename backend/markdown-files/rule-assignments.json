@@ -1,0 +1,50 @@
+{
+  "task_validator-10-feasibility": [
+    "task_validator"
+  ],
+  "solution_strategist-10-non-technical": [
+    "solution_strategist"
+  ],
+  "technical_architect-10-blueprint": [
+    "technical_architect"
+  ],
+  "code_builder-10-implement": [
+    "code_builder"
+  ],
+  "sql_guardian-10-select-only": [
+    "sql_guardian"
+  ],
+  "implementation_auditor-10-verify-plan": [
+    "implementation_auditor"
+  ],
+  "response_publisher-10-package-payload": [
+    "response_publisher"
+  ],
+  "shared-00-security": [
+    "task_validator",
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "sql_guardian",
+    "implementation_auditor",
+    "response_publisher"
+  ],
+  "shared-01-output-contract": [
+    "task_validator",
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "sql_guardian",
+    "implementation_auditor",
+    "response_publisher"
+  ],
+  "shared-02-base-behavior": [
+    "task_validator",
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "sql_guardian",
+    "implementation_auditor",
+    "response_publisher"
+  ]
+}

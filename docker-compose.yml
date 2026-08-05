@@ -1,0 +1,28 @@
+# Host port publishing is optional. Behind a reverse proxy on the same Docker network,
+# set PUBLISH_PORT= (empty) so the service is reachable only on DOCKER_NETWORK.
+services:
+  helix-api:
+    image: ${IMAGE_TAG:-helix-api:latest}
+    container_name: helix-api
+    restart: unless-stopped
+    environment:
+      HELIX_ALLOWED_HOSTS: "*"
+      HELIX_DEBUG: "false"
+      OPENROUTER_TOKEN: ${OPENROUTER_TOKEN:-}
+      PORT: "${INTERNAL_PORT:-8000}"
+    volumes:
+      - ./backend/markdown-files:/app/backend/markdown-files
+      - ./helix.config.yaml:/app/helix.config.yaml
+    expose:
+      - "${INTERNAL_PORT:-8000}"
+    ports:
+      - target: ${INTERNAL_PORT:-8000}
+        published: ${PUBLISH_PORT-8000}
+        protocol: tcp
+    networks:
+      - helix-net
+
+networks:
+  helix-net:
+    name: ${DOCKER_NETWORK:-helix-net}
+    external: true

@@ -1,0 +1,35 @@
+*.exe
+*.EXE
+
+# Local secrets / config (use helix.config.example.yaml as the template)
+helix.config.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs / local runs
+*.log
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Django
+backend/db.sqlite3
+backend/**/__pycache__/
