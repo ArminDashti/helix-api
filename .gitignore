@@ -35,3 +35,5 @@ backend/db.sqlite3
 backend/**/__pycache__/
 
 # auto-managed large files (>5MB)
+
+# === auto-managed large files (>5MB) ===
