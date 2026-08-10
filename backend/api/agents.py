@@ -40,3 +40,7 @@ AGENT_PIPELINE = [
 
 AGENT_IDS = [a["id"] for a in AGENT_PIPELINE]
 AGENT_BY_ID = {a["id"]: a for a in AGENT_PIPELINE}
+
+
+def is_builtin_agent(agent_id: str) -> bool:
+    return agent_id in AGENT_BY_ID

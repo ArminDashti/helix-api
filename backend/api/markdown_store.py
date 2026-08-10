@@ -13,6 +13,22 @@ from .agents import AGENT_BY_ID, AGENT_IDS, AGENT_PIPELINE
 SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}$")
 
 
+def _known_agent_ids() -> set[str]:
+    from .config_loader import known_agent_ids
+
+    return known_agent_ids()
+
+
+def _all_agent_metas() -> list[dict]:
+    from .config_loader import get_all_agent_metas
+
+    return get_all_agent_metas()
+
+
+def _agent_scope_ids() -> list[str]:
+    return [meta["id"] for meta in _all_agent_metas()]
+
+
 def root() -> Path:
     return Path(settings.MARKDOWN_FILES_DIR)
 
@@ -48,7 +64,7 @@ def _skill_scope_dir(scope: str) -> Path:
     scope = scope.strip()
     if scope == "shared":
         return skills_dir() / "shared"
-    if scope not in AGENT_BY_ID:
+    if scope not in _known_agent_ids():
         raise KeyError(f"Unknown skill scope: {scope}")
     return skills_dir() / scope
 
@@ -133,12 +149,12 @@ def list_skills(scope: str | None = None) -> list[dict]:
                 )
 
     if scope:
-        if scope != "shared" and scope not in AGENT_BY_ID:
+        if scope != "shared" and scope not in _known_agent_ids():
             raise KeyError(f"Unknown skill scope: {scope}")
         collect(scope)
     else:
         collect("shared")
-        for agent_id in AGENT_IDS:
+        for agent_id in _agent_scope_ids():
             collect(agent_id)
 
     return items
@@ -152,7 +168,7 @@ def get_skill(scope: str, skill_id: str) -> dict:
 def create_skill(scope: str, skill_id: str, content: str = "") -> dict:
     ensure_dirs()
     stem = _safe_stem(skill_id)
-    if scope != "shared" and scope not in AGENT_BY_ID:
+    if scope != "shared" and scope not in _known_agent_ids():
         raise KeyError(f"Unknown skill scope: {scope}")
     path = _skill_path(scope, stem)
     if path.exists():
@@ -255,16 +271,25 @@ def seed_if_empty() -> None:
 
 def list_agents_with_instructions() -> list[dict]:
     ensure_dirs()
+    # Lazy import avoids circular import at module load
+    from .config_loader import get_agent_display_names
+
+    names = get_agent_display_names()
     result = []
-    for meta in AGENT_PIPELINE:
+    for meta in _all_agent_metas():
         path = instructions_dir() / f"{meta['id']}.md"
         content = path.read_text(encoding="utf-8") if path.exists() else ""
-        result.append({**meta, "instruction": content})
+        result.append(
+            {
+                **meta,
+                "name": names.get(meta["id"], meta["name"]),
+                "instruction": content,
+            }
+        )
     return result
 
-
 def get_instruction(agent_id: str) -> str:
-    if agent_id not in AGENT_BY_ID:
+    if agent_id not in _known_agent_ids():
         raise KeyError(f"Unknown agent: {agent_id}")
     path = instructions_dir() / f"{agent_id}.md"
     if not path.exists():
@@ -273,7 +298,7 @@ def get_instruction(agent_id: str) -> str:
 
 
 def set_instruction(agent_id: str, content: str) -> str:
-    if agent_id not in AGENT_BY_ID:
+    if agent_id not in _known_agent_ids():
         raise KeyError(f"Unknown agent: {agent_id}")
     ensure_dirs()
     path = instructions_dir() / f"{agent_id}.md"
@@ -415,21 +440,23 @@ def load_assignments() -> dict[str, list[str]]:
     raw = json.loads(assignments_path().read_text(encoding="utf-8") or "{}")
     if not isinstance(raw, dict):
         return {}
+    known = _known_agent_ids()
     cleaned: dict[str, list[str]] = {}
     for key, value in raw.items():
         if not isinstance(value, list):
             continue
-        cleaned[str(key)] = [a for a in value if a in AGENT_BY_ID]
+        cleaned[str(key)] = [a for a in value if a in known]
     return cleaned
 
 
 def save_assignments(assignments: dict[str, list[str]]) -> dict[str, list[str]]:
     ensure_dirs()
+    known = _known_agent_ids()
     cleaned: dict[str, list[str]] = {}
     for key, agents in assignments.items():
         if not isinstance(agents, list):
             continue
-        cleaned[str(key)] = [a for a in agents if a in AGENT_BY_ID]
+        cleaned[str(key)] = [a for a in agents if a in known]
     assignments_path().write_text(
         json.dumps(cleaned, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -439,5 +466,52 @@ def save_assignments(assignments: dict[str, list[str]]) -> dict[str, list[str]]:
 
 def _set_rule_agents(rule_id: str, agents: list[str]) -> None:
     assignments = load_assignments()
-    assignments[rule_id] = [a for a in agents if a in AGENT_BY_ID]
+    known = _known_agent_ids()
+    assignments[rule_id] = [a for a in agents if a in known]
     save_assignments(assignments)
+
+def rename_rule(old_id: str, new_id: str) -> dict:
+    ensure_dirs()
+    old_stem = _safe_stem(old_id)
+    new_stem = _safe_stem(new_id)
+    if old_stem == new_stem:
+        return get_rule(old_stem)
+    old_path = rules_dir() / f"{old_stem}.md"
+    new_path = rules_dir() / f"{new_stem}.md"
+    if not old_path.exists():
+        raise FileNotFoundError(old_stem)
+    if new_path.exists():
+        raise FileExistsError(new_stem)
+    content = old_path.read_text(encoding="utf-8")
+    new_path.write_text(content, encoding="utf-8")
+    old_path.unlink()
+    assignments = load_assignments()
+    if old_stem in assignments:
+        assignments[new_stem] = assignments.pop(old_stem)
+        save_assignments(assignments)
+    return get_rule(new_stem)
+
+
+def rename_skill(scope: str, old_id: str, new_id: str) -> dict:
+    ensure_dirs()
+    if scope != "shared" and scope not in _known_agent_ids():
+        raise KeyError(f"Unknown skill scope: {scope}")
+    old_stem = _safe_stem(old_id)
+    new_stem = _safe_stem(new_id)
+    if old_stem == new_stem:
+        return _read_skill(scope, old_stem)
+    old_path = _skill_path(scope, old_stem)
+    new_path = _skill_path(scope, new_stem)
+    if not old_path.exists():
+        raise FileNotFoundError(f"{scope}/{old_stem}")
+    if new_path.exists():
+        raise FileExistsError(f"{scope}/{new_stem}")
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    content = old_path.read_text(encoding="utf-8")
+    new_path.write_text(content, encoding="utf-8")
+    old_path.unlink()
+    try:
+        old_path.parent.rmdir()
+    except OSError:
+        pass
+    return _read_skill(scope, new_stem)

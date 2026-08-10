@@ -2,6 +2,10 @@
 # Do not commit helix.config.yaml.
 #
 # OpenRouter auth: set env OPENROUTER_TOKEN (never store the token in this file).
+# Cursor auth: set env CURSOR_API_KEY (never store the token in this file).
+# Active LLM provider: openrouter | cursor
+provider: openrouter
+
 # Models are suggestions only — use any OpenRouter model ids you prefer.
 # Runtime resolves: openrouter.agents.<id>.model, else openrouter.default_model.
 
@@ -25,6 +29,25 @@ openrouter:
     response_publisher:
       model: "openai/gpt-4o-mini"
 
+
+cursor:
+  app_name: "Helix"
+  default_model: "composer-2"
+  agents:
+    task_validator:
+      model: "composer-2"
+    solution_strategist:
+      model: "composer-2"
+    technical_architect:
+      model: "composer-2"
+    code_builder:
+      model: "composer-2"
+    sql_guardian:
+      model: "composer-2"
+    implementation_auditor:
+      model: "composer-2"
+    response_publisher:
+      model: "composer-2"
 app:
   secret_key: "change-me"
   debug: true
@@ -63,3 +86,10 @@ sql_guardian:
   require_row_limit: true # TOP / FETCH / LIMIT (unless pure aggregate)
   forbid_select_star: true
   max_rows: 10000 # align with sandbox.max_rows
+
+# Optional user-defined agents (not part of the Analysis runtime pipeline).
+# custom_agents:
+#   - id: pipeline_designer
+#     name: Pipeline Designer
+#     description: Designs and documents analysis pipelines
+
