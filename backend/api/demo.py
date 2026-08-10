@@ -5,24 +5,33 @@ from __future__ import annotations
 
 def get_demo_result(mode: str) -> dict:
     echarts_option = {
-        "color": ["#1f6f5b", "#3d8b74", "#7ab89f"],
+        "color": ["#3d9b82", "#5cb89a", "#7ab89f"],
+        "backgroundColor": "transparent",
         "title": {
             "text": "Revenue by region",
             "left": "center",
-            "textStyle": {"color": "#0f1c1a", "fontWeight": 600, "fontSize": 16},
+            "textStyle": {"color": "#e6ebe9", "fontWeight": 600, "fontSize": 16},
         },
-        "tooltip": {"trigger": "axis"},
+        "tooltip": {
+            "trigger": "axis",
+            "backgroundColor": "#24302d",
+            "borderColor": "#3a4a45",
+            "textStyle": {"color": "#e6ebe9"},
+        },
         "grid": {"left": 48, "right": 24, "top": 56, "bottom": 40},
         "xAxis": {
             "type": "category",
             "data": ["North", "South", "East", "West"],
-            "axisLabel": {"color": "#5c6f69"},
+            "axisLabel": {"color": "#9aada6"},
+            "axisLine": {"lineStyle": {"color": "#3a4a45"}},
         },
         "yAxis": {
             "type": "value",
             "name": "USD",
-            "axisLabel": {"color": "#5c6f69"},
-            "splitLine": {"lineStyle": {"color": "#c9d6d0"}},
+            "nameTextStyle": {"color": "#9aada6"},
+            "axisLabel": {"color": "#9aada6"},
+            "splitLine": {"lineStyle": {"color": "#3a4a45"}},
+            "axisLine": {"lineStyle": {"color": "#3a4a45"}},
         },
         "series": [
             {

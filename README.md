@@ -10,7 +10,7 @@ Companion UI: [helix-webui](https://github.com/ArminDashti/helix-webui).
 cd backend
 pip install -r requirements.txt
 copy ..\helix.config.example.yaml ..\helix.config.yaml
-# OpenRouter: set OPENROUTER_TOKEN in your environment (not in helix.config.yaml)
+# OpenRouter: set OPENROUTER_TOKEN (and CURSOR_API_KEY when using Cursor) in your environment (not in helix.config.yaml)
 python manage.py migrate
 python manage.py runserver 127.0.0.1:8000
 ```

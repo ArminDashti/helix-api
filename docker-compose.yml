@@ -9,6 +9,7 @@ services:
       HELIX_ALLOWED_HOSTS: "*"
       HELIX_DEBUG: "false"
       OPENROUTER_TOKEN: ${OPENROUTER_TOKEN:-}
+      CURSOR_API_KEY: ${CURSOR_API_KEY:-}
       PORT: "${INTERNAL_PORT:-8000}"
     volumes:
       - ./backend/markdown-files:/app/backend/markdown-files
@@ -26,3 +27,4 @@ networks:
   helix-net:
     name: ${DOCKER_NETWORK:-helix-net}
     external: true
+
