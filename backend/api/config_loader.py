@@ -128,7 +128,10 @@ def get_database_settings() -> dict[str, Any]:
 
 def update_database_settings(payload: dict[str, Any]) -> dict[str, Any]:
     data = load_config()
-    current = get_database_settings()
+    if "connection_string" in payload and payload.get("connection_string") is not None:
+        current = connection_string_to_database(str(payload["connection_string"]))
+    else:
+        current = get_database_settings()
     allowed = set(DEFAULT_DATABASE.keys())
     for key, value in payload.items():
         if key not in allowed:
@@ -161,9 +164,87 @@ def database_to_connection_string(db: dict[str, Any] | None = None) -> str:
     return ";".join(parts)
 
 
+def connection_string_to_database(conn: str) -> dict[str, Any]:
+    """Parse an ODBC-style Key=Value; connection string into database settings."""
+    if not isinstance(conn, str) or not conn.strip():
+        raise ValueError("connection_string must be a non-empty string")
+
+    parts: dict[str, str] = {}
+    for chunk in conn.split(";"):
+        chunk = chunk.strip()
+        if not chunk or "=" not in chunk:
+            continue
+        key, value = chunk.split("=", 1)
+        parts[key.strip().lower()] = value.strip()
+
+    current = get_database_settings()
+    driver = parts.get("driver")
+    if driver:
+        current["driver"] = driver.strip("{}")
+
+    server = parts.get("server") or parts.get("data source") or parts.get("address")
+    if server:
+        if "," in server:
+            host, port_s = server.rsplit(",", 1)
+            current["host"] = host.strip()
+            try:
+                current["port"] = int(port_s.strip())
+            except ValueError as exc:
+                raise ValueError("connection_string Server port must be an integer") from exc
+        else:
+            current["host"] = server.strip()
+
+    if "database" in parts or "initial catalog" in parts:
+        current["name"] = parts.get("database") or parts.get("initial catalog") or ""
+    if "uid" in parts or "user id" in parts or "username" in parts:
+        current["user"] = (
+            parts.get("uid") or parts.get("user id") or parts.get("username") or ""
+        )
+    if "pwd" in parts or "password" in parts:
+        current["password"] = parts.get("pwd") or parts.get("password") or ""
+
+    encrypt = parts.get("encrypt")
+    if encrypt is not None:
+        current["encrypt"] = encrypt.lower() in ("yes", "true", "1")
+    trust = parts.get("trustservercertificate")
+    if trust is not None:
+        current["trust_server_certificate"] = trust.lower() in ("yes", "true", "1")
+
+    return current
+
+
+def _mask_secret(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 4:
+        return "••••"
+    return f"••••{value[-4:]}"
+
+
+def _yaml_openrouter_api_key() -> str:
+    data = load_config()
+    raw = data.get("openrouter") or {}
+    if not isinstance(raw, dict):
+        return ""
+    key = raw.get("api_key") or raw.get("token")
+    return str(key).strip() if key else ""
+
+
+def _yaml_cursor_api_key() -> str:
+    data = load_config()
+    raw = data.get("cursor") or {}
+    if not isinstance(raw, dict):
+        return ""
+    key = raw.get("api_key") or raw.get("token")
+    return str(key).strip() if key else ""
+
+
 def get_openrouter_token() -> str:
-    """OpenRouter API token from OPENROUTER_TOKEN only (never from YAML)."""
-    return os.environ.get("OPENROUTER_TOKEN", "").strip()
+    """OpenRouter token: env OPENROUTER_TOKEN wins, else YAML openrouter.api_key."""
+    env = os.environ.get("OPENROUTER_TOKEN", "").strip()
+    if env:
+        return env
+    return _yaml_openrouter_api_key()
 
 
 _MODELS_CACHE: dict[str, Any] = {"fetched_at": 0.0, "models": []}
@@ -253,6 +334,7 @@ def get_openrouter_settings() -> dict[str, Any]:
         elif agent_id in agents_raw:
             agents[agent_id] = {"model": default_model}
 
+    token = get_openrouter_token()
     return {
         "site_url": "" if raw.get("site_url") is None else str(raw.get("site_url")),
         "app_name": (
@@ -262,13 +344,16 @@ def get_openrouter_settings() -> dict[str, Any]:
         ),
         "default_model": default_model,
         "agents": agents,
-        "token_configured": bool(get_openrouter_token()),
+        "token_configured": bool(token),
+        "token_hint": _mask_secret(token),
+        "token_from_env": bool(os.environ.get("OPENROUTER_TOKEN", "").strip()),
     }
 
 
 def update_openrouter_settings(payload: dict[str, Any]) -> dict[str, Any]:
     data = load_config()
     current = get_openrouter_settings()
+    existing_key = _yaml_openrouter_api_key()
 
     if "site_url" in payload:
         current["site_url"] = "" if payload["site_url"] is None else str(payload["site_url"])
@@ -298,16 +383,25 @@ def update_openrouter_settings(payload: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"agents.{agent_key}.model must be a non-empty string")
             current["agents"][agent_key] = {"model": str(model).strip()}
 
-    # Persist YAML without the token flag or any api_key
-    data["openrouter"] = {
+    api_key = existing_key
+    if "api_key" in payload or "token" in payload:
+        raw_key = payload["api_key"] if "api_key" in payload else payload.get("token")
+        if raw_key is None or str(raw_key).strip() == "":
+            api_key = ""
+        else:
+            api_key = str(raw_key).strip()
+
+    section: dict[str, Any] = {
         "site_url": current["site_url"],
         "app_name": current["app_name"],
         "default_model": current["default_model"],
         "agents": deepcopy(current["agents"]),
     }
+    if api_key:
+        section["api_key"] = api_key
+    data["openrouter"] = section
     save_config(data)
-    current["token_configured"] = bool(get_openrouter_token())
-    return current
+    return get_openrouter_settings()
 
 
 def get_provider() -> str:
@@ -512,8 +606,11 @@ def update_agent_display_name(agent_id: str, name: str) -> dict[str, str]:
 
 
 def get_cursor_token() -> str:
-    """Cursor API key from CURSOR_API_KEY only (never from YAML)."""
-    return os.environ.get("CURSOR_API_KEY", "").strip()
+    """Cursor API key: env CURSOR_API_KEY wins, else YAML cursor.api_key."""
+    env = os.environ.get("CURSOR_API_KEY", "").strip()
+    if env:
+        return env
+    return _yaml_cursor_api_key()
 
 
 _CURSOR_MODELS_CACHE: dict[str, Any] = {"fetched_at": 0.0, "models": []}
@@ -605,6 +702,7 @@ def get_cursor_settings() -> dict[str, Any]:
         elif agent_id in agents_raw:
             agents[agent_id] = {"model": default_model}
 
+    token = get_cursor_token()
     return {
         "app_name": (
             DEFAULT_CURSOR["app_name"]
@@ -613,13 +711,16 @@ def get_cursor_settings() -> dict[str, Any]:
         ),
         "default_model": default_model,
         "agents": agents,
-        "token_configured": bool(get_cursor_token()),
+        "token_configured": bool(token),
+        "token_hint": _mask_secret(token),
+        "token_from_env": bool(os.environ.get("CURSOR_API_KEY", "").strip()),
     }
 
 
 def update_cursor_settings(payload: dict[str, Any]) -> dict[str, Any]:
     data = load_config()
     current = get_cursor_settings()
+    existing_key = _yaml_cursor_api_key()
 
     if "app_name" in payload:
         value = payload["app_name"]
@@ -645,14 +746,24 @@ def update_cursor_settings(payload: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"agents.{agent_key}.model must be a non-empty string")
             current["agents"][agent_key] = {"model": str(model).strip()}
 
-    data["cursor"] = {
+    api_key = existing_key
+    if "api_key" in payload or "token" in payload:
+        raw_key = payload["api_key"] if "api_key" in payload else payload.get("token")
+        if raw_key is None or str(raw_key).strip() == "":
+            api_key = ""
+        else:
+            api_key = str(raw_key).strip()
+
+    section: dict[str, Any] = {
         "app_name": current["app_name"],
         "default_model": current["default_model"],
         "agents": deepcopy(current["agents"]),
     }
+    if api_key:
+        section["api_key"] = api_key
+    data["cursor"] = section
     save_config(data)
-    current["token_configured"] = bool(get_cursor_token())
-    return current
+    return get_cursor_settings()
 
 
 def get_active_provider_settings() -> dict[str, Any]:

@@ -35,6 +35,7 @@ urlpatterns = [
         views.admin_cursor_models,
         name="admin-cursor-models",
     ),
+    path("admin/pipeline-graph/", views.admin_pipeline_graph, name="admin-pipeline-graph"),
     path("runs/stream", views.runs_stream, name="runs-stream"),
     path("chat", views.chat, name="chat"),
 ]

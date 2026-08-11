@@ -1,8 +1,8 @@
 # Copy to helix.config.yaml and fill in secrets.
 # Do not commit helix.config.yaml.
 #
-# OpenRouter auth: set env OPENROUTER_TOKEN (never store the token in this file).
-# Cursor auth: set env CURSOR_API_KEY (never store the token in this file).
+# OpenRouter auth: set env OPENROUTER_TOKEN (wins) or openrouter.api_key in this file.
+# Cursor auth: set env CURSOR_API_KEY (wins) or cursor.api_key in this file.
 # Active LLM provider: openrouter | cursor
 provider: openrouter
 

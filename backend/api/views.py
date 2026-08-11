@@ -11,7 +11,6 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from . import markdown_store as store
-from .agents import AGENT_PIPELINE
 from . import db_sql
 from . import docs_catalog
 from .config_loader import (
@@ -38,6 +37,15 @@ from .config_loader import (
 )
 from .agents import is_builtin_agent
 from .demo import get_demo_result
+from .pipeline_graph import (
+    MAX_STEPS,
+    MAX_VISITS_PER_NODE,
+    agent_display_name,
+    get_pipeline_graph,
+    next_targets,
+    reset_pipeline_graph,
+    update_pipeline_graph,
+)
 
 
 def _json_body(request: HttpRequest) -> dict[str, Any]:
@@ -385,6 +393,8 @@ def admin_database(request: HttpRequest) -> JsonResponse:
     except ValueError as exc:
         return _error(str(exc))
     payload = body.get("database") if isinstance(body.get("database"), dict) else body
+    if isinstance(body, dict) and "connection_string" in body and "connection_string" not in payload:
+        payload = {**payload, "connection_string": body["connection_string"]}
     try:
         db = update_database_settings(payload)
     except ValueError as exc:
@@ -638,6 +648,32 @@ def db_explorer_columns(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"table": f"{schema}.{name}", "columns": columns})
 
 
+# --- Admin pipeline graph ---
+
+
+@csrf_exempt
+@require_http_methods(["GET", "PUT", "DELETE"])
+def admin_pipeline_graph(request: HttpRequest) -> JsonResponse:
+    if request.method == "GET":
+        return JsonResponse({"pipeline_graph": get_pipeline_graph()})
+    if request.method == "DELETE":
+        return JsonResponse({"pipeline_graph": reset_pipeline_graph()})
+    try:
+        body = _json_body(request)
+    except ValueError as exc:
+        return _error(str(exc))
+    payload = (
+        body.get("pipeline_graph")
+        if isinstance(body.get("pipeline_graph"), dict)
+        else body
+    )
+    try:
+        graph = update_pipeline_graph(payload if isinstance(payload, dict) else {})
+    except ValueError as exc:
+        return _error(str(exc))
+    return JsonResponse({"pipeline_graph": graph})
+
+
 # --- Run SSE ---
 
 
@@ -646,8 +682,9 @@ def _sse(data: dict[str, Any]) -> str:
 
 
 def _pipeline_events(prompt: str, mode: str) -> Iterator[str]:
-    """Emit consecutive step events, then a demo result."""
+    """Walk the configured conditional DAG and emit step/result SSE events."""
     provider = get_provider()
+    graph = get_pipeline_graph()
     delay = 0.55
     messages = {
         "task_validator": "Checking prompt feasibility and mode…",
@@ -669,67 +706,70 @@ def _pipeline_events(prompt: str, mode: str) -> Iterator[str]:
     )
     time.sleep(0.25)
 
-    for meta in AGENT_PIPELINE:
-        agent_id = meta["id"]
+    entry = graph.get("entry")
+    if not entry:
+        result = get_demo_result(mode)
+        yield _sse({"event": "result", **result, "used_demo": True})
+        return
+
+    visits: dict[str, int] = {}
+    current: str | None = entry
+    steps = 0
+
+    while current and steps < MAX_STEPS:
+        steps += 1
+        visits[current] = visits.get(current, 0) + 1
+        if visits[current] > MAX_VISITS_PER_NODE:
+            yield _sse(
+                {
+                    "event": "step",
+                    "agent_id": current,
+                    "status": "failed",
+                    "message": f"Visit cap reached for {current}",
+                }
+            )
+            break
+
+        display = agent_display_name(current)
         yield _sse(
             {
                 "event": "step",
-                "agent_id": agent_id,
+                "agent_id": current,
                 "status": "running",
-                "message": messages.get(agent_id, meta["description"]),
+                "message": messages.get(current, f"Running {display}…"),
             }
         )
         time.sleep(delay)
 
-        # Stub one retry loop for sql_guardian (visual loop edge)
-        if agent_id == "sql_guardian":
-            yield _sse(
-                {
-                    "event": "step",
-                    "agent_id": agent_id,
-                    "status": "retry",
-                    "message": "Minor SQL tweak requested — sending back to Code Builder…",
-                    "retry_to": "code_builder",
-                }
-            )
-            time.sleep(delay * 0.7)
-            yield _sse(
-                {
-                    "event": "step",
-                    "agent_id": "code_builder",
-                    "status": "running",
-                    "message": "Adjusting SQL after guardian feedback…",
-                }
-            )
-            time.sleep(delay * 0.6)
-            yield _sse(
-                {
-                    "event": "step",
-                    "agent_id": "code_builder",
-                    "status": "done",
-                    "message": "SQL revised",
-                }
-            )
-            time.sleep(0.3)
-            yield _sse(
-                {
-                    "event": "step",
-                    "agent_id": "sql_guardian",
-                    "status": "running",
-                    "message": "Re-checking revised SQL…",
-                }
-            )
-            time.sleep(delay * 0.5)
+        # Demo stub: sql_guardian emits one retry on first visit only
+        if current == "sql_guardian" and visits[current] == 1:
+            retry_targets = next_targets(graph, current, "retry")
+            if retry_targets:
+                yield _sse(
+                    {
+                        "event": "step",
+                        "agent_id": current,
+                        "status": "retry",
+                        "message": "Minor SQL tweak requested — following retry edge…",
+                        "retry_to": retry_targets[0],
+                    }
+                )
+                time.sleep(delay * 0.5)
+                current = retry_targets[0]
+                continue
 
         yield _sse(
             {
                 "event": "step",
-                "agent_id": agent_id,
+                "agent_id": current,
                 "status": "done",
-                "message": f"{meta['name']} complete",
+                "message": f"{display} complete",
             }
         )
         time.sleep(0.2)
+
+        targets = next_targets(graph, current, "done")
+        current = targets[0] if targets else None
 
     result = get_demo_result(mode)
     yield _sse({"event": "result", **result, "used_demo": True})
