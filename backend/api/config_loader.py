@@ -780,6 +780,7 @@ def delete_custom_agent(agent_id: str) -> None:
         if entry == cleaned_id:
             entry = str(nodes[0].get("id") or "").strip() if nodes else ""
         data["pipeline_graph"] = {"entry": entry or None, "nodes": nodes, "edges": edges}
+        data["pipeline_flow"] = None
 
     save_config(data)
 

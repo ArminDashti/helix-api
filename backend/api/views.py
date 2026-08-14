@@ -47,12 +47,14 @@ from .demo import (
 )
 from .pipeline_graph import (
     MAX_STEPS,
-    MAX_VISITS_PER_NODE,
     agent_display_name,
+    circuit_open_edge,
+    edge_limit,
+    get_pipeline_bundle,
     get_pipeline_graph,
-    next_targets,
-    reset_pipeline_graph,
-    update_pipeline_graph,
+    next_edge,
+    reset_pipeline_bundle,
+    update_pipeline_bundle,
 )
 
 
@@ -765,23 +767,19 @@ def db_explorer_columns(request: HttpRequest) -> JsonResponse:
 @require_http_methods(["GET", "PUT", "DELETE"])
 def admin_pipeline_graph(request: HttpRequest) -> JsonResponse:
     if request.method == "GET":
-        return JsonResponse({"pipeline_graph": get_pipeline_graph()})
+        return JsonResponse(get_pipeline_bundle())
     if request.method == "DELETE":
-        return JsonResponse({"pipeline_graph": reset_pipeline_graph()})
+        return JsonResponse(reset_pipeline_bundle())
     try:
         body = _json_body(request)
     except ValueError as exc:
         return _error(str(exc))
-    payload = (
-        body.get("pipeline_graph")
-        if isinstance(body.get("pipeline_graph"), dict)
-        else body
-    )
+    payload = body if isinstance(body, dict) else {}
     try:
-        graph = update_pipeline_graph(payload if isinstance(payload, dict) else {})
+        bundle = update_pipeline_bundle(payload)
     except ValueError as exc:
         return _error(str(exc))
-    return JsonResponse({"pipeline_graph": graph})
+    return JsonResponse(bundle)
 
 
 # --- Run SSE ---
@@ -839,23 +837,26 @@ def _pipeline_events(
         yield _sse({"event": "result", **result, "used_demo": True})
         return
 
+    edge_uses: dict[str, int] = {}
     visits: dict[str, int] = {}
     current: str | None = entry
     steps = 0
 
+    def pick_next(source: str, status: str) -> tuple[str | None, str | None]:
+        edge = next_edge(graph, source, status, edge_uses)
+        if edge:
+            eid = str(edge.get("id") or "")
+            edge_uses[eid] = edge_uses.get(eid, 0) + 1
+            return str(edge["target"]), None
+        blocked = circuit_open_edge(graph, source, status, edge_uses)
+        if blocked:
+            cap = edge_limit(blocked)
+            return None, f"Circuit open: edge {blocked.get('id')} limit {cap}"
+        return None, None
+
     while current and steps < MAX_STEPS:
         steps += 1
         visits[current] = visits.get(current, 0) + 1
-        if visits[current] > MAX_VISITS_PER_NODE:
-            yield _sse(
-                {
-                    "event": "step",
-                    "agent_id": current,
-                    "status": "failed",
-                    "message": f"Visit cap reached for {current}",
-                }
-            )
-            break
 
         display = agent_display_name(current)
         yield _sse(
@@ -870,19 +871,29 @@ def _pipeline_events(
 
         # Demo stub: sql_guardian emits one retry on first visit only
         if current == "sql_guardian" and visits[current] == 1:
-            retry_targets = next_targets(graph, current, "retry")
-            if retry_targets:
+            retry_to, circuit_msg = pick_next(current, "retry")
+            if circuit_msg:
+                yield _sse(
+                    {
+                        "event": "step",
+                        "agent_id": current,
+                        "status": "failed",
+                        "message": circuit_msg,
+                    }
+                )
+                break
+            if retry_to:
                 yield _sse(
                     {
                         "event": "step",
                         "agent_id": current,
                         "status": "retry",
                         "message": "Minor SQL tweak requested — following retry edge…",
-                        "retry_to": retry_targets[0],
+                        "retry_to": retry_to,
                     }
                 )
                 time.sleep(delay * 0.5)
-                current = retry_targets[0]
+                current = retry_to
                 continue
 
         yield _sse(
@@ -895,8 +906,18 @@ def _pipeline_events(
         )
         time.sleep(0.2)
 
-        targets = next_targets(graph, current, "done")
-        current = targets[0] if targets else None
+        nxt, circuit_msg = pick_next(current, "done")
+        if circuit_msg:
+            yield _sse(
+                {
+                    "event": "step",
+                    "agent_id": current,
+                    "status": "failed",
+                    "message": circuit_msg,
+                }
+            )
+            break
+        current = nxt
 
     result = _result()
     yield _sse({"event": "result", **result, "used_demo": True})

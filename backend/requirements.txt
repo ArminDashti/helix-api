@@ -3,3 +3,4 @@ django-cors-headers>=4.0
 PyYAML>=6.0
 gunicorn>=22.0,<24
 pyodbc>=5.0,<6
+psycopg[binary]>=3.2,<4

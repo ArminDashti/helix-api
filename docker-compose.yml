@@ -1,16 +1,34 @@
 # Host port publishing is optional. Behind a reverse proxy on the same Docker network,
 # set PUBLISH_PORT= (empty) so the service is reachable only on DOCKER_NETWORK.
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: helix-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-helix}
+      POSTGRES_USER: ${POSTGRES_USER:-helix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-helix}
+    volumes:
+      - helix-pg-data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PUBLISH_PORT-5432}:5432"
+    networks:
+      - helix-net
+
   helix-api:
     image: ${IMAGE_TAG:-helix-api:latest}
     container_name: helix-api
     restart: unless-stopped
+    depends_on:
+      - postgres
     environment:
       HELIX_ALLOWED_HOSTS: "*"
       HELIX_DEBUG: "false"
       OPENROUTER_TOKEN: ${OPENROUTER_TOKEN:-}
       CURSOR_API_KEY: ${CURSOR_API_KEY:-}
       PORT: "${INTERNAL_PORT:-8000}"
+      DATABASE_URL: ${DATABASE_URL:-postgresql://helix:helix@postgres:5432/helix}
     volumes:
       - ./backend/markdown-files:/app/backend/markdown-files
       - ./helix.config.yaml:/app/helix.config.yaml
@@ -23,8 +41,10 @@ services:
     networks:
       - helix-net
 
+volumes:
+  helix-pg-data:
+
 networks:
   helix-net:
     name: ${DOCKER_NETWORK:-helix-net}
     external: true
-

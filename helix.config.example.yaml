@@ -102,6 +102,9 @@ sql_guardian:
   forbid_select_star: true
   max_rows: 10000 # align with sandbox.max_rows
 
+# Pipeline layout is stored in helix.config.yaml as pipeline_graph (runner)
+# and pipeline_flow (Arrange / Graph structured IF-ELSE and Loop). Edit in the UI.
+
 # Optional user-defined agents (not part of the Analysis runtime pipeline).
 # custom_agents:
 #   - id: pipeline_designer
