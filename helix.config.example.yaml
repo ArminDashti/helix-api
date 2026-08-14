@@ -1,8 +1,8 @@
 # Copy to helix.config.yaml and fill in secrets.
 # Do not commit helix.config.yaml.
 #
-# OpenRouter auth: set env OPENROUTER_TOKEN (wins) or openrouter.api_key in this file.
-# Cursor auth: set env CURSOR_API_KEY (wins) or cursor.api_key in this file.
+# Paste OpenRouter / Cursor API keys in the Settings UI. They are stored here as
+# openrouter.token / cursor.token (never returned by the API).
 # Active LLM provider: openrouter | cursor
 provider: openrouter
 
@@ -10,7 +10,7 @@ provider: openrouter
 # Runtime resolves: openrouter.agents.<id>.model, else openrouter.default_model.
 
 openrouter:
-  site_url: ""
+  token_env: OPENROUTER_TOKEN
   app_name: "Helix"
   default_model: "openai/gpt-4o-mini"
   agents:
@@ -31,6 +31,7 @@ openrouter:
 
 
 cursor:
+  token_env: CURSOR_API_KEY
   app_name: "Helix"
   default_model: "composer-2"
   agents:
@@ -59,15 +60,29 @@ app:
     - "http://localhost:5173"
 
 database:
-  # Any SQL Server instance / login — prefer a least-privilege SELECT account.
-  host: ""
-  port: 1433
-  name: ""
-  user: ""
-  password: ""
-  driver: "ODBC Driver 18 for SQL Server"
-  trust_server_certificate: true
-  encrypt: true
+  # Default: AdventureWorks LT sample SQLite (downloaded + installed on first API start).
+  # Engine: sqlite | postgresql | sqlserver
+  engine: sqlite
+  name: helix-sample.sqlite
+  # PostgreSQL example:
+  # engine: postgresql
+  # host: "127.0.0.1"
+  # port: 5432
+  # name: helix
+  # user: helix
+  # password: ""
+  # sslmode: prefer
+  # SQL Server example (e.g. full AdventureWorks):
+  # engine: sqlserver
+  # host: "127.0.0.1"
+  # port: 1433
+  # name: AdventureWorksLT2022
+  # user: sa
+  # password: ""
+  # driver: "ODBC Driver 18 for SQL Server"
+  # trust_server_certificate: true
+  # encrypt: true
+
 
 frontend:
   api_base_url: "http://127.0.0.1:8000"

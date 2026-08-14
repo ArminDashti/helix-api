@@ -1,5 +1,5 @@
 ---
-name: validate-feasibility
+name: Validate feasibility
 description: Check prompt and mode against Helix capabilities and allowlisted schema
 ---
 

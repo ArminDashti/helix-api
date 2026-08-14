@@ -1,6 +1,7 @@
 ---
-name: craft-solution-narrative
-description: Write a clear non-technical plan for what the analysis or chart should convey
+name: Craft solution narrative
+description: Write a clear non-technical plan for what the analysis or chart should
+  convey
 ---
 
 # Craft solution narrative

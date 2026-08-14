@@ -1,6 +1,7 @@
 ---
-name: sql-safety
-description: Validate SQL as SELECT-only, allowlisted, and not an unbounded heavy fetch
+name: SQL safety
+description: Validate SQL as SELECT-only, allowlisted, and not an unbounded heavy
+  fetch
 ---
 
 # SQL safety

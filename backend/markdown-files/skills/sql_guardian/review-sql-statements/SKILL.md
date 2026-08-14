@@ -1,6 +1,7 @@
 ---
-name: review-sql-statements
-description: Approve or reject each SQL statement with SELECT-only and anti-heavy checks
+name: Review SQL statements
+description: Approve or reject each SQL statement with SELECT-only and anti-heavy
+  checks
 ---
 
 # Review SQL statements

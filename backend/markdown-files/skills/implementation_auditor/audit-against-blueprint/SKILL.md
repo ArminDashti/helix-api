@@ -1,6 +1,7 @@
 ---
-name: audit-against-blueprint
-description: Checklist verification of builder output versus the technical architect plan
+name: Audit against blueprint
+description: Checklist verification of builder output versus the technical architect
+  plan
 ---
 
 # Audit against blueprint

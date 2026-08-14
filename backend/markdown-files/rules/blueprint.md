@@ -1,3 +1,6 @@
+---
+name: Blueprint
+---
 # Technical Architect rules
 
 1. Specify only allowlisted objects from `tables.md`.

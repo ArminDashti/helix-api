@@ -1,3 +1,6 @@
+---
+name: Select only
+---
 # SQL Guardian rules
 
 1. Allow only SELECT (and safe CTE+SELECT); reject INSERT/UPDATE/DELETE/MERGE/DDL/EXEC and write batches.

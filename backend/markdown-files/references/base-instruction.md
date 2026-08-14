@@ -25,7 +25,7 @@ Do not skip steps. Do not impersonate another agent’s job.
 ## Shared references
 
 - **`tables.md`** — the only allowed SQL Server objects and column catalog. Never invent tables, views, or columns.
-- **Shared rules** (`shared-00-security`, `shared-01-output-contract`, `shared-02-base-behavior`) — always in force.
+- **Shared rules** (`security`, `output-contract`, `base-behavior`) — always in force.
 - Agent-specific rules under Rules — apply in addition to shared rules.
 
 ## Hard constraints

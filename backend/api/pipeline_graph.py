@@ -5,8 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from .agents import AGENT_BY_ID, AGENT_PIPELINE
-from .config_loader import known_agent_ids, load_config, save_config
+from .agents import AGENT_BY_ID
+from .config_loader import get_agent_display_names, get_all_agent_metas, known_agent_ids, load_config, save_config
 
 WHEN_TYPES = frozenset({"always", "on_success", "on_failure", "on_retry", "on_status"})
 MAX_STEPS = 64
@@ -14,12 +14,19 @@ MAX_VISITS_PER_NODE = 3
 
 
 def default_pipeline_graph() -> dict[str, Any]:
-    """Linear AGENT_PIPELINE plus sql_guardian → code_builder retry edge."""
+    """Linear remaining pipeline agents plus sql_guardian → code_builder retry edge."""
+    metas = [
+        meta
+        for meta in get_all_agent_metas()
+        if meta.get("builtin") or meta["id"] in AGENT_BY_ID
+    ]
+    if not metas:
+        metas = list(get_all_agent_metas())
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     x = 0.0
     y = 0.0
-    for i, meta in enumerate(AGENT_PIPELINE):
+    for i, meta in enumerate(metas):
         nodes.append(
             {
                 "id": meta["id"],
@@ -27,7 +34,7 @@ def default_pipeline_graph() -> dict[str, Any]:
             }
         )
         if i > 0:
-            prev = AGENT_PIPELINE[i - 1]["id"]
+            prev = metas[i - 1]["id"]
             edges.append(
                 {
                     "id": f"e_{prev}_{meta['id']}",
@@ -37,17 +44,19 @@ def default_pipeline_graph() -> dict[str, Any]:
                     "when": {"type": "always"},
                 }
             )
-    edges.append(
-        {
-            "id": "e_sql_guardian_code_builder_retry",
-            "source": "sql_guardian",
-            "target": "code_builder",
-            "direction": "forward",
-            "when": {"type": "on_retry"},
-        }
-    )
+    ids = {meta["id"] for meta in metas}
+    if "sql_guardian" in ids and "code_builder" in ids:
+        edges.append(
+            {
+                "id": "e_sql_guardian_code_builder_retry",
+                "source": "sql_guardian",
+                "target": "code_builder",
+                "direction": "forward",
+                "when": {"type": "on_retry"},
+            }
+        )
     return {
-        "entry": AGENT_PIPELINE[0]["id"] if AGENT_PIPELINE else None,
+        "entry": metas[0]["id"] if metas else None,
         "nodes": nodes,
         "edges": edges,
     }
@@ -200,6 +209,9 @@ def next_targets(
 
 
 def agent_display_name(agent_id: str) -> str:
+    names = get_agent_display_names()
+    if agent_id in names:
+        return names[agent_id]
     meta = AGENT_BY_ID.get(agent_id)
     if meta:
         return meta["name"]

@@ -1,3 +1,6 @@
+---
+name: Verify plan
+---
 # Implementation Auditor rules
 
 1. Judge plan compliance, not only absence of runtime errors.

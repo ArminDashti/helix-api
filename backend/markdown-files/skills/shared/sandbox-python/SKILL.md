@@ -1,6 +1,7 @@
 ---
-name: sandbox-python
-description: Write Python for the Helix sandbox using only pre-installed allowlisted libraries
+name: Sandbox Python
+description: Write Python for the Helix sandbox using only pre-installed allowlisted
+  libraries
 ---
 
 # Sandbox Python

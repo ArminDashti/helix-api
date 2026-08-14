@@ -1,5 +1,5 @@
 ---
-name: implement-sandbox-script
+name: Implement sandbox script
 description: Generate and repair sandbox Python until it runs without errors
 ---
 

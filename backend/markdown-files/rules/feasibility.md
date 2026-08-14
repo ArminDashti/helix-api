@@ -1,3 +1,6 @@
+---
+name: Feasibility
+---
 # Task Validator rules
 
 1. Reject tasks that require tables/views outside `tables.md`.

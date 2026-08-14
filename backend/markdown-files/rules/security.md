@@ -1,3 +1,6 @@
+---
+name: Security
+---
 # Shared security rules
 
 Apply to every agent in the Helix pipeline. Also follow `references/base-instruction.md`.

@@ -1,5 +1,5 @@
 ---
-name: write-technical-blueprint
+name: Write technical blueprint
 description: Produce an implementation blueprint for Code Builder and the auditor
 ---
 

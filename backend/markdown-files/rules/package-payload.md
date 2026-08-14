@@ -1,3 +1,6 @@
+---
+name: Package payload
+---
 # Response Publisher rules
 
 1. Honor mode strictly: null out unused fields (`analysis` → no chart; `chart` → no text).

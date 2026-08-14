@@ -165,3 +165,57 @@ def get_table_docs(table: str) -> dict[str, Any]:
         "source": source,
         "error": error,
     }
+
+
+def update_table_overview(table: str, overview: str) -> dict[str, Any]:
+    """Write the table explanation into references/tables.md and return merged docs."""
+    schema, name = db_sql.parse_table_name(table)
+    heading = f"{schema}.{name}"
+    key = heading.lower()
+    text = overview.strip() if isinstance(overview, str) else ""
+    desc_line = f"- **Description:** {text}" if text else "- **Description:**"
+
+    try:
+        md = store.get_reference("tables").get("content") or ""
+    except FileNotFoundError:
+        md = "# Catalog\n\n"
+        store.create_reference("tables", md)
+
+    matches = list(TABLE_SECTION_RE.finditer(md))
+    target_index = None
+    for i, match in enumerate(matches):
+        title = match.group("title").strip()
+        if title.lower() in (key, heading.lower()):
+            target_index = i
+            break
+
+    if target_index is None:
+        block = f"\n## {heading}\n\n- **Kind:** table\n{desc_line}\n"
+        md = md.rstrip() + "\n" + block
+    else:
+        match = matches[target_index]
+        start = match.end()
+        end = (
+            matches[target_index + 1].start()
+            if target_index + 1 < len(matches)
+            else len(md)
+        )
+        body = md[start:end]
+        new_body, n = re.subn(
+            r"(?im)^-\s+\*\*Description:?\*\*:?[^\n]*",
+            desc_line,
+            body,
+            count=1,
+        )
+        if n == 0:
+            kind_m = re.search(r"(?im)^-\s+\*\*Kind:?\*\*:?[^\n]*\n?", body)
+            if kind_m:
+                new_body = (
+                    body[: kind_m.end()] + desc_line + "\n" + body[kind_m.end() :]
+                )
+            else:
+                new_body = "\n" + desc_line + "\n" + body.lstrip("\n")
+        md = md[:start] + new_body + md[end:]
+
+    store.update_reference("tables", md)
+    return get_table_docs(table)

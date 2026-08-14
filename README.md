@@ -10,12 +10,14 @@ Companion UI: [helix-webui](https://github.com/ArminDashti/helix-webui).
 cd backend
 pip install -r requirements.txt
 copy ..\helix.config.example.yaml ..\helix.config.yaml
-# OpenRouter: set OPENROUTER_TOKEN (and CURSOR_API_KEY when using Cursor) in your environment (not in helix.config.yaml)
+# Paste the OpenRouter or Cursor API key in the web UI Settings page.
 python manage.py migrate
 python manage.py runserver 127.0.0.1:8000
 ```
 
 Editable Markdown lives in `backend/markdown-files/` (seeded from `analytics/agents` on first start).
+
+By default the analytics connection uses a **sample SQLite AdventureWorks LT database** (`backend/data/helix-sample.sqlite`, downloaded on first API start) so Docs, DB Explorer, and agent runs have real customer/product/order data. Switch to PostgreSQL/SQL Server under Settings when you have a real warehouse.
 
 ## Docker
 

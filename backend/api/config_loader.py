@@ -19,16 +19,23 @@ from django.conf import settings
 from .agents import AGENT_BY_ID, AGENT_PIPELINE, is_builtin_agent
 
 AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+TOKEN_ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+DEFAULT_OPENROUTER_TOKEN_ENV = "OPENROUTER_TOKEN"
+DEFAULT_CURSOR_TOKEN_ENV = "CURSOR_API_KEY"
 
 DEFAULT_DATABASE = {
+    # Built-in AdventureWorks LT sample SQLite (seeded on first start).
+    "engine": "sqlite",
     "host": "",
-    "port": 1433,
-    "name": "",
+    "port": 0,
+    "name": "helix-sample.sqlite",
     "user": "",
     "password": "",
+    "sslmode": "prefer",
     "driver": "ODBC Driver 18 for SQL Server",
     "trust_server_certificate": True,
     "encrypt": True,
+    "path": "",
 }
 
 DEFAULT_AGENT_MODELS = {
@@ -52,13 +59,14 @@ DEFAULT_CURSOR_AGENT_MODELS = {
 }
 
 DEFAULT_OPENROUTER = {
-    "site_url": "",
+    "token_env": DEFAULT_OPENROUTER_TOKEN_ENV,
     "app_name": "Helix",
     "default_model": "openai/gpt-4o-mini",
     "agents": {agent_id: {"model": model} for agent_id, model in DEFAULT_AGENT_MODELS.items()},
 }
 
 DEFAULT_CURSOR = {
+    "token_env": DEFAULT_CURSOR_TOKEN_ENV,
     "app_name": "Helix",
     "default_model": "composer-2",
     "agents": {
@@ -108,22 +116,74 @@ def save_config(data: dict[str, Any]) -> None:
     )
 
 
+def is_user_provided_database(db: dict[str, Any] | None) -> bool:
+    """True when the user configured a real warehouse (not the built-in sample)."""
+    from .db_dialects.base import normalize_engine
+    from .sample_database import is_sample_db_path
+
+    if not isinstance(db, dict) or not db:
+        return False
+    engine = normalize_engine(db.get("engine"))
+    name = str(db.get("name") or db.get("path") or "").strip()
+    host = str(db.get("host") or "").strip()
+    if engine == "sqlite":
+        return bool(name) and not is_sample_db_path(name)
+    return bool(host and name)
+
+
+def _finalize_database(db: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize settings; missing warehouse config becomes sqlite + sample file."""
+    from .db_dialects.base import normalize_engine
+    from .sample_database import SAMPLE_FILENAME, resolve_sqlite_path
+
+    raw = db if isinstance(db, dict) else {}
+    merged = {**DEFAULT_DATABASE, **raw}
+    if not is_user_provided_database(merged):
+        merged = deepcopy(DEFAULT_DATABASE)
+    merged["engine"] = normalize_engine(merged.get("engine"))
+    if merged["engine"] == "sqlite":
+        default_port = 0
+    elif merged["engine"] == "postgresql":
+        default_port = 5432
+    else:
+        default_port = 1433
+    try:
+        merged["port"] = int(merged.get("port") or default_port)
+    except (TypeError, ValueError):
+        merged["port"] = default_port
+    merged["trust_server_certificate"] = bool(merged.get("trust_server_certificate", True))
+    merged["encrypt"] = bool(merged.get("encrypt", True))
+    for key in (
+        "host",
+        "name",
+        "user",
+        "password",
+        "driver",
+        "sslmode",
+        "path",
+    ):
+        merged[key] = "" if merged.get(key) is None else str(merged[key])
+    if merged["engine"] == "sqlite":
+        raw_name = (merged.get("name") or merged.get("path") or SAMPLE_FILENAME).strip()
+        resolved = resolve_sqlite_path(raw_name or SAMPLE_FILENAME)
+        merged["name"] = str(resolved)
+        merged["path"] = str(resolved)
+    return merged
+
+
+def get_database_engine() -> str:
+    from .db_dialects.base import normalize_engine
+
+    db = get_database_settings()
+    return normalize_engine(db.get("engine"))
+
+
 def get_database_settings() -> dict[str, Any]:
     data = load_config()
     db = data.get("database") or {}
     if not isinstance(db, dict):
         db = {}
-    merged = {**DEFAULT_DATABASE, **db}
-    # Normalize types
-    try:
-        merged["port"] = int(merged.get("port") or 1433)
-    except (TypeError, ValueError):
-        merged["port"] = 1433
-    merged["trust_server_certificate"] = bool(merged.get("trust_server_certificate", True))
-    merged["encrypt"] = bool(merged.get("encrypt", True))
-    for key in ("host", "name", "user", "password", "driver"):
-        merged[key] = "" if merged.get(key) is None else str(merged[key])
-    return merged
+    return _finalize_database(db)
 
 
 def update_database_settings(payload: dict[str, Any]) -> dict[str, Any]:
@@ -143,15 +203,47 @@ def update_database_settings(payload: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError("port must be an integer") from exc
         elif key in ("trust_server_certificate", "encrypt"):
             current[key] = bool(value)
+        elif key == "engine":
+            from .db_dialects.base import normalize_engine
+
+            current[key] = normalize_engine(str(value))
         else:
             current[key] = "" if value is None else str(value)
+    current = _finalize_database(current)
     data["database"] = current
     save_config(data)
+    if not is_user_provided_database(current):
+        from .sample_database import ensure_sample_database
+
+        try:
+            ensure_sample_database()
+        except PermissionError:
+            pass
     return current
 
 
 def database_to_connection_string(db: dict[str, Any] | None = None) -> str:
+    from .db_dialects.base import normalize_engine
+
     db = db or get_database_settings()
+    engine = normalize_engine(db.get("engine"))
+    if engine == "postgresql":
+        parts = [
+            f"host={db['host']}",
+            f"port={db['port']}",
+            f"dbname={db['name']}",
+            f"user={db['user']}",
+            f"password={db['password']}",
+        ]
+        sslmode = (db.get("sslmode") or "prefer").strip()
+        if sslmode:
+            parts.append(f"sslmode={sslmode}")
+        return " ".join(parts)
+    if engine == "sqlite":
+        from .sample_database import resolve_sqlite_path
+
+        path = resolve_sqlite_path(db.get("name") or db.get("path") or "")
+        return f"file:{path}"
     parts = [
         f"Driver={{{db['driver']}}}",
         f"Server={db['host']},{db['port']}",
@@ -165,19 +257,48 @@ def database_to_connection_string(db: dict[str, Any] | None = None) -> str:
 
 
 def connection_string_to_database(conn: str) -> dict[str, Any]:
-    """Parse an ODBC-style Key=Value; connection string into database settings."""
+    """Parse a connection string into database settings."""
     if not isinstance(conn, str) or not conn.strip():
         raise ValueError("connection_string must be a non-empty string")
 
-    parts: dict[str, str] = {}
-    for chunk in conn.split(";"):
+    current = get_database_settings()
+    stripped = conn.strip()
+    if stripped.lower().startswith("file:"):
+        current["engine"] = "sqlite"
+        current["name"] = stripped[5:]
+        current["path"] = current["name"]
+        return current
+
+    if "host=" in stripped and "dbname=" in stripped:
+        parts: dict[str, str] = {}
+        for chunk in stripped.split():
+            if "=" not in chunk:
+                continue
+            key, value = chunk.split("=", 1)
+            parts[key.strip().lower()] = value.strip()
+        current["engine"] = "postgresql"
+        current["host"] = parts.get("host", current["host"])
+        if "port" in parts:
+            try:
+                current["port"] = int(parts["port"])
+            except ValueError as exc:
+                raise ValueError("connection_string port must be an integer") from exc
+        current["name"] = parts.get("dbname", current["name"])
+        current["user"] = parts.get("user", current["user"])
+        current["password"] = parts.get("password", current["password"])
+        if "sslmode" in parts:
+            current["sslmode"] = parts["sslmode"]
+        return current
+
+    parts = {}
+    for chunk in stripped.split(";"):
         chunk = chunk.strip()
         if not chunk or "=" not in chunk:
             continue
         key, value = chunk.split("=", 1)
         parts[key.strip().lower()] = value.strip()
 
-    current = get_database_settings()
+    current["engine"] = "sqlserver"
     driver = parts.get("driver")
     if driver:
         current["driver"] = driver.strip("{}")
@@ -213,38 +334,60 @@ def connection_string_to_database(conn: str) -> dict[str, Any]:
     return current
 
 
-def _mask_secret(value: str) -> str:
-    if not value:
-        return ""
-    if len(value) <= 4:
-        return "••••"
-    return f"••••{value[-4:]}"
+def _normalize_token_env(value: Any, default: str) -> str:
+    name = default if value is None else str(value).strip()
+    if not name:
+        name = default
+    if not TOKEN_ENV_RE.match(name):
+        raise ValueError("token_env must be a valid environment variable name")
+    return name
 
 
-def _yaml_openrouter_api_key() -> str:
+def _token_env_from_section(raw: dict[str, Any], default: str) -> str:
+    try:
+        return _normalize_token_env(raw.get("token_env"), default)
+    except ValueError:
+        return default
+
+
+def get_openrouter_token_env() -> str:
     data = load_config()
     raw = data.get("openrouter") or {}
     if not isinstance(raw, dict):
-        return ""
-    key = raw.get("api_key") or raw.get("token")
-    return str(key).strip() if key else ""
+        raw = {}
+    return _token_env_from_section(raw, DEFAULT_OPENROUTER_TOKEN_ENV)
 
 
-def _yaml_cursor_api_key() -> str:
+def get_cursor_token_env() -> str:
     data = load_config()
     raw = data.get("cursor") or {}
     if not isinstance(raw, dict):
+        raw = {}
+    return _token_env_from_section(raw, DEFAULT_CURSOR_TOKEN_ENV)
+
+
+def _section_stored_token(raw: Any) -> str:
+    if not isinstance(raw, dict):
         return ""
-    key = raw.get("api_key") or raw.get("token")
-    return str(key).strip() if key else ""
+    return str(raw.get("token") or "").strip()
 
 
 def get_openrouter_token() -> str:
-    """OpenRouter token: env OPENROUTER_TOKEN wins, else YAML openrouter.api_key."""
-    env = os.environ.get("OPENROUTER_TOKEN", "").strip()
-    if env:
-        return env
-    return _yaml_openrouter_api_key()
+    """OpenRouter token from Settings (config), then optional env fallback."""
+    data = load_config()
+    token = _section_stored_token(data.get("openrouter"))
+    if token:
+        return token
+    return os.environ.get(get_openrouter_token_env(), "").strip()
+
+
+def get_cursor_token() -> str:
+    """Cursor API key from Settings (config), then optional env fallback."""
+    data = load_config()
+    token = _section_stored_token(data.get("cursor"))
+    if token:
+        return token
+    return os.environ.get(get_cursor_token_env(), "").strip()
 
 
 _MODELS_CACHE: dict[str, Any] = {"fetched_at": 0.0, "models": []}
@@ -266,7 +409,7 @@ def fetch_openrouter_models(*, force: bool = False) -> list[dict[str, str]]:
 
     token = get_openrouter_token()
     if not token:
-        raise ValueError("OPENROUTER_TOKEN is not set")
+        raise ValueError("OpenRouter API key is not set")
 
     req = urllib.request.Request(
         "https://openrouter.ai/api/v1/models",
@@ -312,8 +455,11 @@ def get_openrouter_settings() -> dict[str, Any]:
         raw = {}
 
     agents_raw = raw.get("agents") if isinstance(raw.get("agents"), dict) else {}
+    known = known_agent_ids()
     agents: dict[str, dict[str, str]] = {}
     for agent_id, default_model in DEFAULT_AGENT_MODELS.items():
+        if agent_id not in known:
+            continue
         entry = agents_raw.get(agent_id) if isinstance(agents_raw.get(agent_id), dict) else {}
         model = entry.get("model") if entry else None
         agents[agent_id] = {
@@ -336,7 +482,6 @@ def get_openrouter_settings() -> dict[str, Any]:
 
     token = get_openrouter_token()
     return {
-        "site_url": "" if raw.get("site_url") is None else str(raw.get("site_url")),
         "app_name": (
             DEFAULT_OPENROUTER["app_name"]
             if raw.get("app_name") in (None, "")
@@ -345,18 +490,24 @@ def get_openrouter_settings() -> dict[str, Any]:
         "default_model": default_model,
         "agents": agents,
         "token_configured": bool(token),
-        "token_hint": _mask_secret(token),
-        "token_from_env": bool(os.environ.get("OPENROUTER_TOKEN", "").strip()),
     }
 
 
 def update_openrouter_settings(payload: dict[str, Any]) -> dict[str, Any]:
     data = load_config()
     current = get_openrouter_settings()
-    existing_key = _yaml_openrouter_api_key()
+    raw = data.get("openrouter") if isinstance(data.get("openrouter"), dict) else {}
+    stored_token = _section_stored_token(raw)
+    stored_env = _token_env_from_section(raw, DEFAULT_OPENROUTER_TOKEN_ENV)
 
-    if "site_url" in payload:
-        current["site_url"] = "" if payload["site_url"] is None else str(payload["site_url"])
+    if "token" in payload:
+        incoming = payload.get("token")
+        if incoming is not None and str(incoming).strip():
+            stored_token = str(incoming).strip()
+    if "token_env" in payload:
+        stored_env = _normalize_token_env(
+            payload["token_env"], DEFAULT_OPENROUTER_TOKEN_ENV
+        )
     if "app_name" in payload:
         value = payload["app_name"]
         current["app_name"] = (
@@ -383,22 +534,14 @@ def update_openrouter_settings(payload: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"agents.{agent_key}.model must be a non-empty string")
             current["agents"][agent_key] = {"model": str(model).strip()}
 
-    api_key = existing_key
-    if "api_key" in payload or "token" in payload:
-        raw_key = payload["api_key"] if "api_key" in payload else payload.get("token")
-        if raw_key is None or str(raw_key).strip() == "":
-            api_key = ""
-        else:
-            api_key = str(raw_key).strip()
-
     section: dict[str, Any] = {
-        "site_url": current["site_url"],
+        "token_env": stored_env,
         "app_name": current["app_name"],
         "default_model": current["default_model"],
         "agents": deepcopy(current["agents"]),
     }
-    if api_key:
-        section["api_key"] = api_key
+    if stored_token:
+        section["token"] = stored_token
     data["openrouter"] = section
     save_config(data)
     return get_openrouter_settings()
@@ -446,17 +589,66 @@ def get_custom_agents() -> list[dict[str, str]]:
                 "name": name,
                 "description": description,
                 "builtin": False,
+                "disabled": bool(entry.get("disabled")),
             }
         )
     return agents
 
 
 def get_all_agent_metas() -> list[dict[str, Any]]:
+    disabled = get_disabled_agent_ids()
+    deleted = get_deleted_agent_ids()
     result: list[dict[str, Any]] = []
     for meta in AGENT_PIPELINE:
-        result.append({**meta, "builtin": True})
+        if meta["id"] in deleted:
+            continue
+        result.append({**meta, "builtin": True, "disabled": meta["id"] in disabled})
     result.extend(get_custom_agents())
     return result
+
+
+def get_deleted_agent_ids() -> set[str]:
+    data = load_config()
+    raw = data.get("deleted_agents")
+    if not isinstance(raw, list):
+        return set()
+    return {str(item).strip() for item in raw if str(item).strip()}
+
+
+def get_disabled_agent_ids() -> set[str]:
+    data = load_config()
+    raw = data.get("disabled_agents")
+    if not isinstance(raw, list):
+        return set()
+    return {str(item).strip() for item in raw if str(item).strip()}
+
+
+def set_agent_disabled(agent_id: str, disabled: bool) -> dict[str, Any]:
+    if agent_id not in known_agent_ids():
+        raise KeyError(f"Unknown agent: {agent_id}")
+    data = load_config()
+    if is_builtin_agent(agent_id):
+        current = get_disabled_agent_ids()
+        if disabled:
+            current.add(agent_id)
+        else:
+            current.discard(agent_id)
+        data["disabled_agents"] = sorted(current)
+    else:
+        custom = data.get("custom_agents")
+        if not isinstance(custom, list):
+            raise KeyError(f"Unknown agent: {agent_id}")
+        found = False
+        for entry in custom:
+            if isinstance(entry, dict) and str(entry.get("id") or "").strip() == agent_id:
+                entry["disabled"] = bool(disabled)
+                found = True
+                break
+        if not found:
+            raise KeyError(f"Unknown agent: {agent_id}")
+        data["custom_agents"] = custom
+    save_config(data)
+    return get_agent_meta(agent_id)
 
 
 def known_agent_ids() -> set[str]:
@@ -531,20 +723,29 @@ def create_custom_agent(
 
 def delete_custom_agent(agent_id: str) -> None:
     cleaned_id = (agent_id or "").strip()
-    if is_builtin_agent(cleaned_id):
-        raise ValueError("Cannot delete a built-in pipeline agent")
+    if cleaned_id not in known_agent_ids():
+        raise KeyError(f"Unknown agent: {cleaned_id}")
     data = load_config()
-    custom = data.get("custom_agents")
-    if not isinstance(custom, list):
-        raise KeyError(f"Unknown agent: {cleaned_id}")
-    next_custom = [
-        entry
-        for entry in custom
-        if isinstance(entry, dict) and str(entry.get("id") or "").strip() != cleaned_id
-    ]
-    if len(next_custom) == len(custom):
-        raise KeyError(f"Unknown agent: {cleaned_id}")
-    data["custom_agents"] = next_custom
+
+    if is_builtin_agent(cleaned_id):
+        deleted = get_deleted_agent_ids()
+        deleted.add(cleaned_id)
+        data["deleted_agents"] = sorted(deleted)
+        disabled = get_disabled_agent_ids()
+        disabled.discard(cleaned_id)
+        data["disabled_agents"] = sorted(disabled)
+    else:
+        custom = data.get("custom_agents")
+        if not isinstance(custom, list):
+            raise KeyError(f"Unknown agent: {cleaned_id}")
+        next_custom = [
+            entry
+            for entry in custom
+            if isinstance(entry, dict) and str(entry.get("id") or "").strip() != cleaned_id
+        ]
+        if len(next_custom) == len(custom):
+            raise KeyError(f"Unknown agent: {cleaned_id}")
+        data["custom_agents"] = next_custom
 
     names = data.get("agent_names") if isinstance(data.get("agent_names"), dict) else {}
     if cleaned_id in names:
@@ -561,6 +762,25 @@ def delete_custom_agent(agent_id: str) -> None:
             section_data["agents"] = agents
             data[section] = section_data
 
+    graph = data.get("pipeline_graph")
+    if isinstance(graph, dict):
+        nodes = [
+            node
+            for node in (graph.get("nodes") or [])
+            if isinstance(node, dict) and str(node.get("id") or "").strip() != cleaned_id
+        ]
+        edges = [
+            edge
+            for edge in (graph.get("edges") or [])
+            if isinstance(edge, dict)
+            and str(edge.get("source") or "").strip() != cleaned_id
+            and str(edge.get("target") or "").strip() != cleaned_id
+        ]
+        entry = str(graph.get("entry") or "").strip()
+        if entry == cleaned_id:
+            entry = str(nodes[0].get("id") or "").strip() if nodes else ""
+        data["pipeline_graph"] = {"entry": entry or None, "nodes": nodes, "edges": edges}
+
     save_config(data)
 
     from . import markdown_store as store
@@ -568,6 +788,8 @@ def delete_custom_agent(agent_id: str) -> None:
     instr_path = store.instructions_dir() / f"{cleaned_id}.md"
     if instr_path.exists():
         instr_path.unlink()
+    store.save_assignments(store.load_assignments())
+    store.save_skill_assignments(store.load_skill_assignments())
 
 
 def get_agent_display_names() -> dict[str, str]:
@@ -605,14 +827,6 @@ def update_agent_display_name(agent_id: str, name: str) -> dict[str, str]:
     return get_agent_display_names()
 
 
-def get_cursor_token() -> str:
-    """Cursor API key: env CURSOR_API_KEY wins, else YAML cursor.api_key."""
-    env = os.environ.get("CURSOR_API_KEY", "").strip()
-    if env:
-        return env
-    return _yaml_cursor_api_key()
-
-
 _CURSOR_MODELS_CACHE: dict[str, Any] = {"fetched_at": 0.0, "models": []}
 _CURSOR_MODELS_CACHE_TTL_SEC = 600
 
@@ -632,7 +846,7 @@ def fetch_cursor_models(*, force: bool = False) -> list[dict[str, str]]:
 
     token = get_cursor_token()
     if not token:
-        raise ValueError("CURSOR_API_KEY is not set")
+        raise ValueError("Cursor API key is not set")
 
     basic = base64.b64encode(f"{token}:".encode("utf-8")).decode("ascii")
     req = urllib.request.Request(
@@ -681,8 +895,11 @@ def get_cursor_settings() -> dict[str, Any]:
         raw = {}
 
     agents_raw = raw.get("agents") if isinstance(raw.get("agents"), dict) else {}
+    known = known_agent_ids()
     agents: dict[str, dict[str, str]] = {}
     for agent_id, default_model in DEFAULT_CURSOR_AGENT_MODELS.items():
+        if agent_id not in known:
+            continue
         entry = agents_raw.get(agent_id) if isinstance(agents_raw.get(agent_id), dict) else {}
         model = entry.get("model") if entry else None
         agents[agent_id] = {
@@ -712,16 +929,24 @@ def get_cursor_settings() -> dict[str, Any]:
         "default_model": default_model,
         "agents": agents,
         "token_configured": bool(token),
-        "token_hint": _mask_secret(token),
-        "token_from_env": bool(os.environ.get("CURSOR_API_KEY", "").strip()),
     }
 
 
 def update_cursor_settings(payload: dict[str, Any]) -> dict[str, Any]:
     data = load_config()
     current = get_cursor_settings()
-    existing_key = _yaml_cursor_api_key()
+    raw = data.get("cursor") if isinstance(data.get("cursor"), dict) else {}
+    stored_token = _section_stored_token(raw)
+    stored_env = _token_env_from_section(raw, DEFAULT_CURSOR_TOKEN_ENV)
 
+    if "token" in payload:
+        incoming = payload.get("token")
+        if incoming is not None and str(incoming).strip():
+            stored_token = str(incoming).strip()
+    if "token_env" in payload:
+        stored_env = _normalize_token_env(
+            payload["token_env"], DEFAULT_CURSOR_TOKEN_ENV
+        )
     if "app_name" in payload:
         value = payload["app_name"]
         current["app_name"] = DEFAULT_CURSOR["app_name"] if value in (None, "") else str(value)
@@ -746,21 +971,14 @@ def update_cursor_settings(payload: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"agents.{agent_key}.model must be a non-empty string")
             current["agents"][agent_key] = {"model": str(model).strip()}
 
-    api_key = existing_key
-    if "api_key" in payload or "token" in payload:
-        raw_key = payload["api_key"] if "api_key" in payload else payload.get("token")
-        if raw_key is None or str(raw_key).strip() == "":
-            api_key = ""
-        else:
-            api_key = str(raw_key).strip()
-
     section: dict[str, Any] = {
+        "token_env": stored_env,
         "app_name": current["app_name"],
         "default_model": current["default_model"],
         "agents": deepcopy(current["agents"]),
     }
-    if api_key:
-        section["api_key"] = api_key
+    if stored_token:
+        section["token"] = stored_token
     data["cursor"] = section
     save_config(data)
     return get_cursor_settings()

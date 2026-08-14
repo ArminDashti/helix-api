@@ -1,3 +1,6 @@
+---
+name: Non-technical
+---
 # Solution Strategist rules
 
 1. Stay non-technical: no SQL, code, table DDL, or package names.

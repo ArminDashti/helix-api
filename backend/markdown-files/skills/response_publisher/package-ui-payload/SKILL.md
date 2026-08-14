@@ -1,5 +1,5 @@
 ---
-name: package-ui-payload
+name: Package UI payload
 description: Map approved artifacts to mode, text_report, and echarts_option
 ---
 

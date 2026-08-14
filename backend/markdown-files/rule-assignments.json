@@ -1,50 +1,50 @@
 {
-  "task_validator-10-feasibility": [
+  "security": [
+    "task_validator",
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "sql_guardian",
+    "implementation_auditor",
+    "response_publisher"
+  ],
+  "output-contract": [
+    "task_validator",
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "sql_guardian",
+    "implementation_auditor",
+    "response_publisher"
+  ],
+  "base-behavior": [
+    "task_validator",
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "sql_guardian",
+    "implementation_auditor",
+    "response_publisher"
+  ],
+  "feasibility": [
     "task_validator"
   ],
-  "solution_strategist-10-non-technical": [
+  "non-technical": [
     "solution_strategist"
   ],
-  "technical_architect-10-blueprint": [
+  "blueprint": [
     "technical_architect"
   ],
-  "code_builder-10-implement": [
+  "implement": [
     "code_builder"
   ],
-  "sql_guardian-10-select-only": [
+  "select-only": [
     "sql_guardian"
   ],
-  "implementation_auditor-10-verify-plan": [
+  "verify-plan": [
     "implementation_auditor"
   ],
-  "response_publisher-10-package-payload": [
-    "response_publisher"
-  ],
-  "shared-00-security": [
-    "task_validator",
-    "solution_strategist",
-    "technical_architect",
-    "code_builder",
-    "sql_guardian",
-    "implementation_auditor",
-    "response_publisher"
-  ],
-  "shared-01-output-contract": [
-    "task_validator",
-    "solution_strategist",
-    "technical_architect",
-    "code_builder",
-    "sql_guardian",
-    "implementation_auditor",
-    "response_publisher"
-  ],
-  "shared-02-base-behavior": [
-    "task_validator",
-    "solution_strategist",
-    "technical_architect",
-    "code_builder",
-    "sql_guardian",
-    "implementation_auditor",
+  "package-payload": [
     "response_publisher"
   ]
 }

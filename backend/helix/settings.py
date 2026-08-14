@@ -53,12 +53,33 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "helix.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+_db_url = os.environ.get("DATABASE_URL", "").strip()
+if _db_url:
+    from urllib.parse import unquote, urlparse
+
+    _parsed = urlparse(_db_url)
+    _db_name = (_parsed.path or "/helix").lstrip("/")
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": _db_name,
+            "USER": unquote(_parsed.username or "helix"),
+            "PASSWORD": unquote(_parsed.password or ""),
+            "HOST": _parsed.hostname or "127.0.0.1",
+            "PORT": str(_parsed.port or 5432),
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.environ.get("HELIX_DATABASE_NAME", "helix"),
+            "USER": os.environ.get("HELIX_DATABASE_USER", "helix"),
+            "PASSWORD": os.environ.get("HELIX_DATABASE_PASSWORD", ""),
+            "HOST": os.environ.get("HELIX_DATABASE_HOST", "127.0.0.1"),
+            "PORT": os.environ.get("HELIX_DATABASE_PORT", "5432"),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -91,17 +112,25 @@ HELIX_CONFIG_EXAMPLE_PATH = Path(
     )
 )
 
-CORS_ALLOWED_ORIGINS = [
+_default_cors = [
     "http://127.0.0.1:5173",
     "http://localhost:5173",
     "http://127.0.0.1:5177",
     "http://localhost:5177",
+    "http://127.0.0.1:5643",
+    "http://localhost:5643",
 ]
+_extra_cors = [
+    origin.strip()
+    for origin in os.environ.get("HELIX_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(_default_cors + _extra_cors))
 CORS_ALLOW_CREDENTIALS = True
+if DEBUG:
+    # Local Vite may rematch off :5173 when that port is blocked (EACCES).
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
+    ]
 
-CSRF_TRUSTED_ORIGINS = [
-    "http://127.0.0.1:5173",
-    "http://localhost:5173",
-    "http://127.0.0.1:5177",
-    "http://localhost:5177",
-]
+CSRF_TRUSTED_ORIGINS = list(CORS_ALLOWED_ORIGINS)

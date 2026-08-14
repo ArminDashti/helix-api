@@ -1,5 +1,5 @@
 ---
-name: echarts-response
+name: ECharts response
 description: Produce a valid Apache ECharts option JSON object for chart or both modes
 ---
 

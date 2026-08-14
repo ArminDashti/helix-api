@@ -1,3 +1,6 @@
+---
+name: Output contract
+---
 # Output contract
 
 Honor the request `mode` exactly when packaging or planning outputs. See also `references/base-instruction.md`.

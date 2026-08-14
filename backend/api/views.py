@@ -13,6 +13,7 @@ from django.views.decorators.http import require_http_methods
 from . import markdown_store as store
 from . import db_sql
 from . import docs_catalog
+from . import results_store
 from .config_loader import (
     create_custom_agent,
     database_to_connection_string,
@@ -24,19 +25,26 @@ from .config_loader import (
     get_agent_meta,
     get_cursor_settings,
     get_cursor_token,
+    get_database_engine,
     get_database_settings,
     get_openrouter_settings,
     get_openrouter_token,
     get_provider,
     known_agent_ids,
+    set_agent_disabled,
     update_agent_display_name,
     update_cursor_settings,
     update_database_settings,
     update_openrouter_settings,
     update_provider,
 )
-from .agents import is_builtin_agent
-from .demo import get_demo_result
+from .demo import (
+    VALID_CHART_TYPES,
+    VALID_LANGUAGES,
+    VALID_MODES,
+    VALID_REPORT_TYPES,
+    get_demo_result,
+)
 from .pipeline_graph import (
     MAX_STEPS,
     MAX_VISITS_PER_NODE,
@@ -74,10 +82,19 @@ def health(request: HttpRequest) -> JsonResponse:
     api = {"status": "connected"}
 
     db = get_database_settings()
-    if not db.get("host") or not db.get("name"):
+    engine = get_database_engine()
+    configured = engine == "sqlite" or (
+        bool(db.get("host")) and bool(db.get("name"))
+    )
+    if engine == "sqlite":
+        from .sample_database import ensure_configured_sample_if_needed
+
+        ensure_configured_sample_if_needed()
+    if not configured:
         database: dict[str, Any] = {
             "status": "not_configured",
-            "detail": "Host and database name are not set",
+            "engine": engine,
+            "detail": "Database connection is not configured",
         }
     else:
         try:
@@ -85,16 +102,20 @@ def health(request: HttpRequest) -> JsonResponse:
                 cur = conn.cursor()
                 cur.execute("SELECT 1")
                 cur.fetchone()
-            database = {"status": "connected"}
+            database = {"status": "connected", "engine": engine}
         except Exception as exc:  # noqa: BLE001 — surface any driver/network error
-            database = {"status": "disconnected", "detail": str(exc)}
+            database = {
+                "status": "disconnected",
+                "engine": engine,
+                "detail": str(exc),
+            }
 
     if get_openrouter_token():
         openrouter: dict[str, Any] = {"status": "configured"}
     else:
         openrouter = {
             "status": "missing_token",
-            "detail": "OPENROUTER_TOKEN is not set",
+            "detail": "OpenRouter API key is not set",
         }
 
     if get_cursor_token():
@@ -102,7 +123,7 @@ def health(request: HttpRequest) -> JsonResponse:
     else:
         cursor = {
             "status": "missing_token",
-            "detail": "CURSOR_API_KEY is not set",
+            "detail": "Cursor API key is not set",
         }
 
     ok = database.get("status") == "connected"
@@ -113,6 +134,7 @@ def health(request: HttpRequest) -> JsonResponse:
             "database": database,
             "openrouter": openrouter,
             "cursor": cursor,
+            "provider": get_provider(),
         }
     )
 
@@ -251,9 +273,11 @@ def rules_collection(request: HttpRequest) -> JsonResponse:
         body = _json_body(request)
     except ValueError as exc:
         return _error(str(exc))
-    rule_id = body.get("id") or body.get("name") or ""
+    rule_id = body.get("id") or ""
     content = body.get("content", "")
     agents = body.get("agents")
+    name = body.get("name")
+    disabled = body.get("disabled")
     if not rule_id:
         return _error("id is required")
     try:
@@ -261,6 +285,8 @@ def rules_collection(request: HttpRequest) -> JsonResponse:
             str(rule_id),
             content if isinstance(content, str) else "",
             agents if isinstance(agents, list) else None,
+            name=str(name) if name is not None else None,
+            disabled=bool(disabled),
         )
     except ValueError as exc:
         return _error(str(exc))
@@ -297,6 +323,8 @@ def rule_detail(request: HttpRequest, rule_id: str) -> HttpResponse:
         body = _json_body(request)
         content = body.get("content")
         agents = body.get("agents")
+        name = body.get("name")
+        disabled = body.get("disabled")
         if content is not None and not isinstance(content, str):
             return _error("content must be a string")
         if agents is not None and not isinstance(agents, list):
@@ -306,6 +334,8 @@ def rule_detail(request: HttpRequest, rule_id: str) -> HttpResponse:
                 rule_id,
                 content=content,
                 agents=agents,
+                name=str(name) if name is not None else None,
+                disabled=None if disabled is None else bool(disabled),
             )
         )
     except ValueError as exc:
@@ -330,18 +360,24 @@ def skills_collection(request: HttpRequest) -> JsonResponse:
         body = _json_body(request)
     except ValueError as exc:
         return _error(str(exc))
-    skill_id = body.get("id") or body.get("name") or ""
+    skill_id = body.get("id") or ""
     scope = body.get("scope") or ""
     content = body.get("content", "")
+    agents = body.get("agents")
+    name = body.get("name")
+    disabled = body.get("disabled")
     if not skill_id:
         return _error("id is required")
-    if not scope:
-        return _error("scope is required (shared or an agent id)")
+    if not scope and not (isinstance(agents, list) and agents):
+        return _error("scope or agents is required")
     try:
         item = store.create_skill(
             str(scope),
             str(skill_id),
             content if isinstance(content, str) else "",
+            agents=agents if isinstance(agents, list) else None,
+            name=str(name) if name is not None else None,
+            disabled=bool(disabled),
         )
     except ValueError as exc:
         return _error(str(exc))
@@ -362,10 +398,24 @@ def skill_detail(request: HttpRequest, scope: str, skill_id: str) -> HttpRespons
             store.delete_skill(scope, skill_id)
             return HttpResponse(status=204)
         body = _json_body(request)
-        content = body.get("content", "")
-        if not isinstance(content, str):
+        content = body.get("content")
+        agents = body.get("agents")
+        name = body.get("name")
+        disabled = body.get("disabled")
+        if content is not None and not isinstance(content, str):
             return _error("content must be a string")
-        return JsonResponse(store.update_skill(scope, skill_id, content))
+        if agents is not None and not isinstance(agents, list):
+            return _error("agents must be a list")
+        return JsonResponse(
+            store.update_skill(
+                scope,
+                skill_id,
+                content,
+                agents=agents if isinstance(agents, list) else None,
+                name=str(name) if name is not None else None,
+                disabled=None if disabled is None else bool(disabled),
+            )
+        )
     except ValueError as exc:
         return _error(str(exc))
     except KeyError as exc:
@@ -432,7 +482,7 @@ def admin_openrouter_models(request: HttpRequest) -> JsonResponse:
         models = fetch_openrouter_models(force=force)
     except ValueError as exc:
         message = str(exc)
-        status = 503 if "OPENROUTER_TOKEN" in message else 502
+        status = 503 if "is not set" in message else 502
         return _error(message, status=status)
     return JsonResponse({"models": models})
 
@@ -445,8 +495,6 @@ def agent_rename(request: HttpRequest, agent_id: str) -> JsonResponse:
     if agent_id not in known_agent_ids():
         return _error(f"Unknown agent: {agent_id}", 404)
     if request.method == "DELETE":
-        if is_builtin_agent(agent_id):
-            return _error("Cannot delete a built-in pipeline agent", 400)
         try:
             delete_custom_agent(agent_id)
         except KeyError:
@@ -459,19 +507,27 @@ def agent_rename(request: HttpRequest, agent_id: str) -> JsonResponse:
     except ValueError as exc:
         return _error(str(exc))
     name = body.get("name")
-    if not isinstance(name, str):
-        return _error("name must be a string")
-    try:
-        names = update_agent_display_name(agent_id, name)
-    except ValueError as exc:
-        return _error(str(exc))
-    except KeyError:
-        return _error(f"Unknown agent: {agent_id}", 404)
+    disabled = body.get("disabled")
+    if name is not None:
+        if not isinstance(name, str):
+            return _error("name must be a string")
+        try:
+            update_agent_display_name(agent_id, name)
+        except ValueError as exc:
+            return _error(str(exc))
+        except KeyError:
+            return _error(f"Unknown agent: {agent_id}", 404)
+    if disabled is not None:
+        try:
+            set_agent_disabled(agent_id, bool(disabled))
+        except KeyError:
+            return _error(f"Unknown agent: {agent_id}", 404)
     try:
         meta = get_agent_meta(agent_id)
     except KeyError:
         return _error(f"Unknown agent: {agent_id}", 404)
-    meta = {**meta, "name": names[agent_id]}
+    names = get_agent_display_names()
+    meta = {**meta, "name": names.get(agent_id, meta.get("name"))}
     return JsonResponse(meta)
 
 
@@ -563,7 +619,7 @@ def admin_cursor_models(request: HttpRequest) -> JsonResponse:
         models = fetch_cursor_models(force=force)
     except ValueError as exc:
         message = str(exc)
-        status = 503 if "CURSOR_API_KEY" in message else 502
+        status = 503 if "is not set" in message else 502
         return _error(message, status=status)
     return JsonResponse({"models": models})
 
@@ -575,12 +631,66 @@ def docs_tables(request: HttpRequest) -> JsonResponse:
 
 
 @csrf_exempt
-@require_http_methods(["GET"])
+@require_http_methods(["GET", "PATCH"])
 def docs_table_detail(request: HttpRequest, table: str) -> JsonResponse:
     try:
-        return JsonResponse(docs_catalog.get_table_docs(table))
+        if request.method == "GET":
+            return JsonResponse(docs_catalog.get_table_docs(table))
+        body = _json_body(request)
+        overview = body.get("overview", "")
+        if not isinstance(overview, str):
+            return _error("overview must be a string")
+        return JsonResponse(docs_catalog.update_table_overview(table, overview))
     except ValueError as exc:
         return _error(str(exc))
+    except FileNotFoundError:
+        return _error("tables.md not found", 404)
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def results_collection(request: HttpRequest) -> JsonResponse:
+    if request.method == "GET":
+        return JsonResponse({"results": results_store.list_results()})
+    try:
+        body = _json_body(request)
+    except ValueError as exc:
+        return _error(str(exc))
+    prompt = body.get("prompt") or ""
+    if not isinstance(prompt, str) or not prompt.strip():
+        return _error("prompt is required")
+    mode = body.get("mode") or "auto"
+    language = body.get("language") or "en"
+    if not isinstance(mode, str) or not isinstance(language, str):
+        return _error("mode and language must be strings")
+    payload = body.get("payload")
+    item = results_store.create_result(
+        prompt=prompt.strip(),
+        mode=mode,
+        language=language,
+        payload=payload,
+    )
+    return JsonResponse(item, status=201)
+
+
+@csrf_exempt
+@require_http_methods(["GET", "PATCH"])
+def results_detail(request: HttpRequest, result_id: str) -> JsonResponse:
+    try:
+        if request.method == "GET":
+            return JsonResponse(results_store.get_result(result_id))
+        body = _json_body(request)
+        if "archived" not in body:
+            return _error("archived is required")
+        if not isinstance(body.get("archived"), bool):
+            return _error("archived must be a boolean")
+        return JsonResponse(
+            results_store.update_result(result_id, archived=body["archived"])
+        )
+    except ValueError as exc:
+        return _error(str(exc))
+    except KeyError:
+        return _error("Result not found", 404)
 
 
 @csrf_exempt
@@ -681,7 +791,15 @@ def _sse(data: dict[str, Any]) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _pipeline_events(prompt: str, mode: str) -> Iterator[str]:
+def _pipeline_events(
+    prompt: str,
+    mode: str,
+    *,
+    language: str = "en",
+    report_type: str | None = None,
+    chart_type: str | None = None,
+    columns: list[str] | None = None,
+) -> Iterator[str]:
     """Walk the configured conditional DAG and emit step/result SSE events."""
     provider = get_provider()
     graph = get_pipeline_graph()
@@ -701,14 +819,23 @@ def _pipeline_events(prompt: str, mode: str) -> Iterator[str]:
             "event": "step",
             "agent_id": "user",
             "status": "done",
-            "message": f"Received prompt ({mode}) via {provider}: {prompt[:120]}",
+            "message": f"Received prompt ({mode}/{language}) via {provider}: {prompt[:120]}",
         }
     )
     time.sleep(0.25)
 
+    def _result() -> dict:
+        return get_demo_result(
+            mode,
+            language=language,
+            report_type=report_type,
+            chart_type=chart_type,
+            columns=columns,
+        )
+
     entry = graph.get("entry")
     if not entry:
-        result = get_demo_result(mode)
+        result = _result()
         yield _sse({"event": "result", **result, "used_demo": True})
         return
 
@@ -771,8 +898,44 @@ def _pipeline_events(prompt: str, mode: str) -> Iterator[str]:
         targets = next_targets(graph, current, "done")
         current = targets[0] if targets else None
 
-    result = get_demo_result(mode)
+    result = _result()
     yield _sse({"event": "result", **result, "used_demo": True})
+
+
+def _parse_run_options(
+    body: dict[str, Any],
+) -> tuple[str, str, str, str | None, str | None, list[str] | None] | JsonResponse:
+    prompt = (body.get("prompt") or "").strip()
+    mode = body.get("mode") or "auto"
+    language = body.get("language") or "en"
+    report_type = body.get("report_type") or None
+    chart_type = body.get("chart_type") or None
+    raw_columns = body.get("columns")
+
+    if mode not in VALID_MODES:
+        return _error(
+            "mode must be auto, chart, analytical_report, grid, or analytical_report_chart"
+        )
+    if language not in VALID_LANGUAGES:
+        return _error("language must be en or fa")
+    if not prompt:
+        return _error("prompt is required")
+    if report_type is not None and report_type not in VALID_REPORT_TYPES:
+        return _error("report_type must be deep, summary, or simple")
+    if chart_type is not None and chart_type not in VALID_CHART_TYPES:
+        return _error("chart_type is invalid")
+
+    columns: list[str] | None = None
+    if isinstance(raw_columns, list):
+        columns = [str(c).strip() for c in raw_columns if str(c).strip()]
+    elif isinstance(raw_columns, str) and raw_columns.strip():
+        columns = [
+            p.strip()
+            for p in raw_columns.replace("،", ",").replace("/", ",").split(",")
+            if p.strip()
+        ]
+
+    return prompt, mode, language, report_type, chart_type, columns
 
 
 @csrf_exempt
@@ -783,15 +946,20 @@ def runs_stream(request: HttpRequest) -> HttpResponse:
     except ValueError as exc:
         return _error(str(exc))
 
-    prompt = (body.get("prompt") or "").strip()
-    mode = body.get("mode") or "both"
-    if mode not in ("analysis", "chart", "both"):
-        return _error("mode must be analysis, chart, or both")
-    if not prompt:
-        return _error("prompt is required")
+    parsed = _parse_run_options(body)
+    if isinstance(parsed, JsonResponse):
+        return parsed
+    prompt, mode, language, report_type, chart_type, columns = parsed
 
     response = StreamingHttpResponse(
-        _pipeline_events(prompt, mode),
+        _pipeline_events(
+            prompt,
+            mode,
+            language=language,
+            report_type=report_type,
+            chart_type=chart_type,
+            columns=columns,
+        ),
         content_type="text/event-stream",
     )
     response["Cache-Control"] = "no-cache"
@@ -807,11 +975,16 @@ def chat(request: HttpRequest) -> JsonResponse:
         body = _json_body(request)
     except ValueError as exc:
         return _error(str(exc))
-    prompt = (body.get("prompt") or "").strip()
-    mode = body.get("mode") or "both"
-    if not prompt:
-        return _error("prompt is required")
-    if mode not in ("analysis", "chart", "both"):
-        return _error("mode must be analysis, chart, or both")
-    result = get_demo_result(mode)
+
+    parsed = _parse_run_options(body)
+    if isinstance(parsed, JsonResponse):
+        return parsed
+    _prompt, mode, language, report_type, chart_type, columns = parsed
+    result = get_demo_result(
+        mode,
+        language=language,
+        report_type=report_type,
+        chart_type=chart_type,
+        columns=columns,
+    )
     return JsonResponse({**result, "used_demo": True})

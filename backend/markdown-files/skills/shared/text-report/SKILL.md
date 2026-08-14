@@ -1,5 +1,5 @@
 ---
-name: text-report
+name: Text report
 description: Produce a clear textual analysis report for analysis or both modes
 ---
 
