@@ -18,6 +18,12 @@ def _require_pyodbc():
     try:
         import pyodbc  # type: ignore
     except ImportError as exc:
+        detail = str(exc)
+        if "libodbc" in detail:
+            raise ValueError(
+                "unixODBC is missing (libodbc.so). Install unixodbc and "
+                "ODBC Driver 18 in the API image."
+            ) from exc
         raise ValueError("pyodbc is not installed. Run: pip install pyodbc") from exc
     return pyodbc
 
@@ -194,3 +200,65 @@ def select_rows(
         "rows": rows,
         "row_count": len(rows),
     }
+
+
+def _level1_type(schema: str, table: str) -> str:
+    sql = """
+        SELECT TABLE_TYPE
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute(sql, (schema, table))
+        row = cur.fetchone()
+    if not row:
+        raise ValueError(f"Unknown table {schema}.{table}")
+    kind = str(row[0] or "").upper()
+    return "VIEW" if "VIEW" in kind else "TABLE"
+
+
+def set_column_sql_description(
+    schema: str, table: str, column: str, description: str
+) -> None:
+    names = {c["name"] for c in list_columns(schema, table)}
+    if column not in names:
+        raise ValueError(f"Unknown column {column}")
+    level1 = _level1_type(schema, table)
+    text = (description or "").strip()
+    drop_sql = """
+        EXEC sys.sp_dropextendedproperty
+            @name = N'MS_Description',
+            @level0type = N'SCHEMA', @level0name = ?,
+            @level1type = ?, @level1name = ?,
+            @level2type = N'COLUMN', @level2name = ?
+    """
+    add_sql = """
+        EXEC sys.sp_addextendedproperty
+            @name = N'MS_Description', @value = ?,
+            @level0type = N'SCHEMA', @level0name = ?,
+            @level1type = ?, @level1name = ?,
+            @level2type = N'COLUMN', @level2name = ?
+    """
+    update_sql = """
+        EXEC sys.sp_updateextendedproperty
+            @name = N'MS_Description', @value = ?,
+            @level0type = N'SCHEMA', @level0name = ?,
+            @level1type = ?, @level1name = ?,
+            @level2type = N'COLUMN', @level2name = ?
+    """
+    with connect() as conn:
+        cur = conn.cursor()
+        if not text:
+            try:
+                cur.execute(drop_sql, (schema, level1, table, column))
+            except Exception:
+                pass
+            conn.commit()
+            return
+        try:
+            cur.execute(update_sql, (text, schema, level1, table, column))
+        except Exception:
+            cur.execute(add_sql, (text, schema, level1, table, column))
+        conn.commit()
+

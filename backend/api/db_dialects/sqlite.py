@@ -166,3 +166,12 @@ def select_rows(
         "rows": rows,
         "row_count": len(rows),
     }
+
+
+def set_column_sql_description(
+    schema: str, table: str, column: str, description: str
+) -> None:
+    del schema, table, column
+    if (description or "").strip():
+        raise ValueError("SQLite does not store column SQL descriptions")
+

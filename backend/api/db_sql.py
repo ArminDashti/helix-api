@@ -11,6 +11,7 @@ from .db_dialects import (
     list_tables,
     parse_table_name_for_engine,
     select_rows,
+    set_column_sql_description,
     table_overview,
 )
 from .db_dialects.base import parse_table_name as _parse_table_name
@@ -27,5 +28,6 @@ __all__ = [
     "list_tables",
     "parse_table_name",
     "select_rows",
+    "set_column_sql_description",
     "table_overview",
 ]

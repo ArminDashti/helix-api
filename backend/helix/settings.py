@@ -54,7 +54,20 @@ TEMPLATES = [
 WSGI_APPLICATION = "helix.wsgi.application"
 
 _db_url = os.environ.get("DATABASE_URL", "").strip()
-if _db_url:
+_django_engine = os.environ.get("HELIX_DJANGO_ENGINE", "").strip().lower()
+if _django_engine in ("sqlite", "sqlite3") or _db_url.startswith("sqlite"):
+    _sqlite_name = os.environ.get(
+        "HELIX_DJANGO_SQLITE_PATH",
+        str(BASE_DIR / "data" / "helix-django.sqlite3"),
+    )
+    Path(_sqlite_name).parent.mkdir(parents=True, exist_ok=True)
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": _sqlite_name,
+        }
+    }
+elif _db_url:
     from urllib.parse import unquote, urlparse
 
     _parsed = urlparse(_db_url)

@@ -107,3 +107,17 @@ def update_result(result_id: str, *, archived: bool) -> dict[str, Any]:
             raise KeyError(result_id)
         _save(data)
         return found
+
+
+def delete_result(result_id: str) -> None:
+    with _LOCK:
+        data = _load()
+        next_items = [
+            item
+            for item in data["items"]
+            if not (isinstance(item, dict) and item.get("id") == result_id)
+        ]
+        if len(next_items) == len(data["items"]):
+            raise KeyError(result_id)
+        data["items"] = next_items
+        _save(data)

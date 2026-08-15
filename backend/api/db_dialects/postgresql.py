@@ -188,3 +188,18 @@ def select_rows(
         "rows": rows,
         "row_count": len(rows),
     }
+
+
+def set_column_sql_description(
+    schema: str, table: str, column: str, description: str
+) -> None:
+    names = {c["name"] for c in list_columns(schema, table)}
+    if column not in names:
+        raise ValueError(f"Unknown column {column}")
+    target = f"{fqn(schema, table)}.{quote_ident(column)}"
+    text = (description or "").strip() or None
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"COMMENT ON COLUMN {target} IS %s", (text,))
+        conn.commit()
+

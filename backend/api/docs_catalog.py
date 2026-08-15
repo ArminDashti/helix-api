@@ -130,7 +130,7 @@ def get_table_docs(table: str) -> dict[str, Any]:
                     "data_type": "",
                     "nullable": True,
                     "ordinal": 0,
-                    "description": col_desc,
+                    "description": "",
                 }
             )
 
@@ -140,8 +140,14 @@ def get_table_docs(table: str) -> dict[str, Any]:
         for col in live_columns:
             col_name = col["name"]
             md_desc = doc_cols.get(col_name) or doc_cols.get(col_name.lower()) or ""
-            description = (col.get("description") or "").strip() or md_desc
-            merged_columns.append({**col, "description": description})
+            sql_description = (col.get("description") or "").strip()
+            merged_columns.append(
+                {
+                    **col,
+                    "sql_description": sql_description,
+                    "description": md_desc,
+                }
+            )
     else:
         for col_name, col_desc in doc_cols.items():
             merged_columns.append(
@@ -150,6 +156,7 @@ def get_table_docs(table: str) -> dict[str, Any]:
                     "data_type": "",
                     "nullable": True,
                     "ordinal": 0,
+                    "sql_description": "",
                     "description": col_desc,
                 }
             )
@@ -218,4 +225,104 @@ def update_table_overview(table: str, overview: str) -> dict[str, Any]:
         md = md[:start] + new_body + md[end:]
 
     store.update_reference("tables", md)
+    return get_table_docs(table)
+
+
+def _escape_md_cell(value: str) -> str:
+    return (value or "").replace("|", "\\|").replace("\n", " ").strip()
+
+
+def _upsert_markdown_column(body: str, column: str, description: str) -> str:
+    lines = body.splitlines()
+    cell_text = _escape_md_cell(description)
+    target = column.lower()
+    header_idx = None
+    last_data_idx = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("|") or "---" in stripped:
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if not cells:
+            continue
+        if cells[0].lower() == "column":
+            header_idx = i
+            last_data_idx = i
+            continue
+        if header_idx is None:
+            continue
+        last_data_idx = i
+        if cells[0].lower() == target:
+            rest = cells[2:] if len(cells) > 2 else []
+            lines[i] = "| " + " | ".join([cells[0], cell_text, *rest]) + " |"
+            joined = "\n".join(lines)
+            return joined + ("\n" if body.endswith("\n") else "")
+    new_row = f"| {column} | {cell_text} |"
+    if last_data_idx is not None:
+        lines.insert(last_data_idx + 1, new_row)
+        joined = "\n".join(lines)
+        return joined + ("\n" if body.endswith("\n") else "")
+    prefix = body.rstrip()
+    table = f"| Column | Description |\n| --- | --- |\n{new_row}\n"
+    if prefix:
+        return prefix + "\n\n" + table
+    return table
+
+
+def _ensure_table_section(md: str, heading: str, key: str) -> tuple[str, int, int]:
+    matches = list(TABLE_SECTION_RE.finditer(md))
+    target_index = None
+    for i, match in enumerate(matches):
+        title = match.group("title").strip()
+        if title.lower() in (key, heading.lower()):
+            target_index = i
+            break
+    if target_index is None:
+        md = md.rstrip() + f"\n\n## {heading}\n\n- **Kind:** table\n- **Description:**\n"
+        matches = list(TABLE_SECTION_RE.finditer(md))
+        target_index = len(matches) - 1
+    match = matches[target_index]
+    start = match.end()
+    end = matches[target_index + 1].start() if target_index + 1 < len(matches) else len(md)
+    return md, start, end
+
+
+def update_column_docs(
+    table: str,
+    column: str,
+    description: str,
+    sql_description: str,
+) -> dict[str, Any]:
+    schema, name = db_sql.parse_table_name(table)
+    heading = f"{schema}.{name}"
+    key = heading.lower()
+    col_name = (column or "").strip()
+    if not col_name:
+        raise ValueError("column is required")
+    md_text = description.strip() if isinstance(description, str) else ""
+    sql_text = sql_description.strip() if isinstance(sql_description, str) else ""
+
+    try:
+        md = store.get_reference("tables").get("content") or ""
+    except FileNotFoundError:
+        md = "# Catalog\n\n"
+        store.create_reference("tables", md)
+
+    md, start, end = _ensure_table_section(md, heading, key)
+    body = md[start:end]
+    new_body = _upsert_markdown_column(body, col_name, md_text)
+    md = md[:start] + new_body + md[end:]
+    store.update_reference("tables", md)
+
+    live_names: set[str] = set()
+    try:
+        live_names = {c["name"] for c in db_sql.list_columns(schema, name)}
+    except Exception:
+        live_names = set()
+    if col_name in live_names:
+        db_sql.set_column_sql_description(schema, name, col_name, sql_text)
+    elif sql_text:
+        raise ValueError(
+            "Cannot write SQL description; column is not in the live schema"
+        )
     return get_table_docs(table)

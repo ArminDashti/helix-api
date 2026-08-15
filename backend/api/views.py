@@ -370,8 +370,6 @@ def skills_collection(request: HttpRequest) -> JsonResponse:
     disabled = body.get("disabled")
     if not skill_id:
         return _error("id is required")
-    if not scope and not (isinstance(agents, list) and agents):
-        return _error("scope or agents is required")
     try:
         item = store.create_skill(
             str(scope),
@@ -639,6 +637,21 @@ def docs_table_detail(request: HttpRequest, table: str) -> JsonResponse:
         if request.method == "GET":
             return JsonResponse(docs_catalog.get_table_docs(table))
         body = _json_body(request)
+        if "column" in body:
+            column = body.get("column")
+            description = body.get("description", "")
+            sql_description = body.get("sql_description", "")
+            if not isinstance(column, str) or not column.strip():
+                return _error("column must be a string")
+            if not isinstance(description, str):
+                return _error("description must be a string")
+            if not isinstance(sql_description, str):
+                return _error("sql_description must be a string")
+            return JsonResponse(
+                docs_catalog.update_column_docs(
+                    table, column, description, sql_description
+                )
+            )
         overview = body.get("overview", "")
         if not isinstance(overview, str):
             return _error("overview must be a string")
@@ -676,11 +689,14 @@ def results_collection(request: HttpRequest) -> JsonResponse:
 
 
 @csrf_exempt
-@require_http_methods(["GET", "PATCH"])
-def results_detail(request: HttpRequest, result_id: str) -> JsonResponse:
+@require_http_methods(["GET", "PATCH", "DELETE"])
+def results_detail(request: HttpRequest, result_id: str) -> HttpResponse:
     try:
         if request.method == "GET":
             return JsonResponse(results_store.get_result(result_id))
+        if request.method == "DELETE":
+            results_store.delete_result(result_id)
+            return HttpResponse(status=204)
         body = _json_body(request)
         if "archived" not in body:
             return _error("archived is required")

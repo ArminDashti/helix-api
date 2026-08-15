@@ -35,6 +35,12 @@ def table_overview(schema: str, table: str) -> dict[str, Any]:
     return get_dialect().table_overview(schema, table)
 
 
+def set_column_sql_description(
+    schema: str, table: str, column: str, description: str
+) -> None:
+    get_dialect().set_column_sql_description(schema, table, column, description)
+
+
 def select_rows(**kwargs) -> dict[str, Any]:
     return get_dialect().select_rows(**kwargs)
 
@@ -53,5 +59,6 @@ __all__ = [
     "normalize_engine",
     "parse_table_name_for_engine",
     "select_rows",
+    "set_column_sql_description",
     "table_overview",
 ]

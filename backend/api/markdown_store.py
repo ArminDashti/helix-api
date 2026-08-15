@@ -428,6 +428,8 @@ def create_skill(
         assigned = [a for a in agents if a in known]
         if not scope:
             scope = assigned[0] if len(assigned) == 1 else "shared"
+    if not scope:
+        scope = "shared"
     if scope != "shared" and scope not in known:
         raise KeyError(f"Unknown skill scope: {scope}")
     path = _skill_path(scope, stem)
