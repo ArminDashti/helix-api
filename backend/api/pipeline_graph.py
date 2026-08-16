@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from .agents import AGENT_BY_ID
-from .config_loader import get_agent_display_names, get_all_agent_metas, known_agent_ids, load_config, save_config
+from .config_loader import get_all_agent_metas, known_agent_ids, load_config, save_config
 
 WHEN_TYPES = frozenset({"always", "on_success", "on_failure", "on_retry", "on_status"})
 EDGE_ROLES = frozenset({"then", "else", "loop"})
@@ -14,11 +14,14 @@ EDGE_KINDS = frozenset({"if", "forward", "back", "result_is"})
 MAX_STEPS = 64
 DEFAULT_EDGE_LIMIT = 3
 MAX_VISITS_PER_NODE = DEFAULT_EDGE_LIMIT
-FLOW_TYPES = frozenset({"sequence", "agent", "if", "loop"})
+FLOW_TYPES = frozenset({"sequence", "agent", "if", "loop", "stages", "stage"})
+STAGE_ACTIONS = frozenset({"if", "if_not", "proceed"})
+RESULT_OPS = frozenset({"equal", "not_equal"})
+THEN_ACTIONS = frozenset({"proceed", "stop"})
 
 
 def default_pipeline_graph() -> dict[str, Any]:
-    """Linear remaining pipeline agents plus sql_guardian → code_builder retry edge."""
+    """Linear builtin agents chained with Go to stages."""
     flow = default_pipeline_flow()
     return compile_pipeline_flow(flow)
 
@@ -33,33 +36,25 @@ def default_pipeline_flow() -> dict[str, Any]:
         metas = list(get_all_agent_metas())
     ids = [meta["id"] for meta in metas]
     children: list[dict[str, Any]] = []
-    i = 0
-    while i < len(ids):
-        if (
-            i + 1 < len(ids)
-            and ids[i] == "code_builder"
-            and ids[i + 1] == "sql_guardian"
-        ):
-            children.append(
-                {
-                    "type": "loop",
-                    "id": "loop_default_retry",
-                    "when": {"type": "on_retry"},
-                    "limit": DEFAULT_EDGE_LIMIT,
-                    "body": {
-                        "type": "sequence",
-                        "children": [
-                            {"type": "agent", "id": "code_builder"},
-                            {"type": "agent", "id": "sql_guardian"},
-                        ],
-                    },
-                }
-            )
-            i += 2
-            continue
-        children.append({"type": "agent", "id": ids[i]})
-        i += 1
-    return {"type": "sequence", "children": children}
+    for i, agent_id in enumerate(ids[:-1]):
+        children.append(
+            {
+                "type": "stage",
+                "agent_id": agent_id,
+                "action": "proceed",
+                "next_agent_id": ids[i + 1],
+            }
+        )
+    if len(ids) == 1:
+        children.append(
+            {
+                "type": "stage",
+                "agent_id": ids[0],
+                "action": "proceed",
+                "then": "stop",
+            }
+        )
+    return {"type": "stages", "children": children}
 
 
 def _normalize_when(raw: Any) -> dict[str, Any]:
@@ -74,6 +69,8 @@ def _normalize_when(raw: Any) -> dict[str, Any]:
         if not status:
             raise ValueError("on_status edges require when.status")
         out["status"] = status
+        if raw.get("invert"):
+            out["invert"] = True
     return out
 
 
@@ -282,6 +279,18 @@ def _collect_agent_ids(block: dict[str, Any] | None, out: list[str]) -> None:
         if aid:
             out.append(aid)
         return
+    if btype == "stage":
+        aid = str(block.get("agent_id") or "").strip()
+        nxt = str(block.get("next_agent_id") or "").strip()
+        if aid:
+            out.append(aid)
+        if nxt:
+            out.append(nxt)
+        return
+    if btype == "stages":
+        for child in block.get("children") or []:
+            _collect_agent_ids(child, out)
+        return
     if btype == "sequence":
         for child in block.get("children") or []:
             _collect_agent_ids(child, out)
@@ -294,6 +303,149 @@ def _collect_agent_ids(block: dict[str, Any] | None, out: list[str]) -> None:
         _collect_agent_ids(block.get("body"), out)
 
 
+def _normalize_stage(raw: Any, index: int) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError(f"Stage {index + 1} must be an object")
+    action = str(raw.get("action") or "proceed").strip().lower()
+    if action not in STAGE_ACTIONS:
+        raise ValueError(f"Stage {index + 1} action must be IF, IF NOT, or Go to")
+    agent_id = str(raw.get("agent_id") or raw.get("id") or "").strip()
+    if not agent_id:
+        raise ValueError(f"Stage {index + 1} needs an agent")
+    stage: dict[str, Any] = {"type": "stage", "agent_id": agent_id, "action": action}
+    if action == "proceed":
+        then_act = str(raw.get("then") or "proceed").strip().lower()
+        if then_act not in THEN_ACTIONS:
+            then_act = "proceed"
+        stage["then"] = then_act
+        next_id = str(raw.get("next_agent_id") or "").strip()
+        if then_act == "proceed":
+            if not next_id:
+                raise ValueError(f"Stage {index + 1} Go to needs a next agent")
+            stage["next_agent_id"] = next_id
+        return stage
+    stage["result_field"] = "result"
+    result_op = str(raw.get("result_op") or "equal").strip().lower()
+    if result_op not in RESULT_OPS:
+        raise ValueError(f"Stage {index + 1} Results must be Equal or Not Equal")
+    expected = str(raw.get("expected") or "").strip()
+    if not expected:
+        raise ValueError(f"Stage {index + 1} needs a result value")
+    then_act = str(raw.get("then") or "proceed").strip().lower()
+    if then_act not in THEN_ACTIONS:
+        raise ValueError(f"Stage {index + 1} THEN must be Go to or STOP")
+    stage["result_op"] = result_op
+    stage["expected"] = expected
+    stage["then"] = then_act
+    next_id = str(raw.get("next_agent_id") or "").strip()
+    if then_act == "proceed":
+        if not next_id:
+            raise ValueError(f"Stage {index + 1} THEN Go to needs a next agent")
+        stage["next_agent_id"] = next_id
+    return stage
+
+
+def _normalize_stages(payload: dict[str, Any]) -> dict[str, Any]:
+    raw_children = payload.get("children")
+    if not isinstance(raw_children, list) or not raw_children:
+        raise ValueError("pipeline_flow must include at least one stage")
+    children = [_normalize_stage(child, i) for i, child in enumerate(raw_children)]
+    ids: list[str] = []
+    _collect_agent_ids({"type": "stages", "children": children}, ids)
+    allowed = known_agent_ids()
+    for agent_id in ids:
+        if agent_id not in allowed:
+            raise ValueError(f"Unknown agent node: {agent_id}")
+    return {"type": "stages", "children": children}
+
+
+def _sequence_to_stages(flow: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    children = flow.get("children") or []
+    agent_ids: list[str] = []
+    for child in children:
+        if not isinstance(child, dict) or child.get("type") != "agent":
+            return None, "Arrange needs one IF per stage. Reset to the default flow."
+        aid = str(child.get("id") or "").strip()
+        if not aid:
+            return None, "Arrange needs one IF per stage. Reset to the default flow."
+        agent_ids.append(aid)
+    if not agent_ids:
+        return None, "pipeline_flow must include at least one agent"
+    stages: list[dict[str, Any]] = []
+    for i, agent_id in enumerate(agent_ids[:-1]):
+        stages.append(
+            {
+                "type": "stage",
+                "agent_id": agent_id,
+                "action": "proceed",
+                "then": "proceed",
+                "next_agent_id": agent_ids[i + 1],
+            }
+        )
+    if len(agent_ids) == 1:
+        stages.append(
+            {
+                "type": "stage",
+                "agent_id": agent_ids[0],
+                "action": "proceed",
+                "then": "stop",
+            }
+        )
+    return _normalize_stages({"type": "stages", "children": stages}), None
+
+
+def _compile_stages(
+    flow: dict[str, Any],
+    positions: dict[str, dict[str, float]],
+) -> dict[str, Any]:
+    children = flow.get("children") or []
+    node_ids: list[str] = []
+    for stage in children:
+        for key in ("agent_id", "next_agent_id"):
+            aid = str(stage.get(key) or "").strip()
+            if aid and aid not in node_ids:
+                node_ids.append(aid)
+    if not node_ids:
+        raise ValueError("pipeline_flow must include at least one agent")
+    nodes = []
+    y = 0.0
+    for i, agent_id in enumerate(node_ids):
+        pos = positions.get(agent_id) or {"x": 0.0, "y": y}
+        y = max(y, float(pos.get("y", 0)) + 100)
+        nodes.append({"id": agent_id, "position": {"x": float(pos.get("x", 0)), "y": float(pos.get("y", y))}})
+    edges: list[dict[str, Any]] = []
+    for i, stage in enumerate(children):
+        then_act = str(stage.get("then") or "proceed")
+        target = str(stage.get("next_agent_id") or "").strip()
+        source = str(stage["agent_id"])
+        if then_act == "stop" or not target:
+            continue
+        action = stage.get("action")
+        if action == "proceed":
+            when = {"type": "always"}
+            kind = "forward"
+        else:
+            invert = action == "if_not"
+            if stage.get("result_op") == "not_equal":
+                invert = not invert
+            when = {"type": "on_status", "status": stage.get("expected")}
+            if invert:
+                when["invert"] = True
+            kind = "result_is"
+        edges.append(
+            {
+                "id": f"e_stage_{i}_{source}_{target}",
+                "source": source,
+                "target": target,
+                "direction": "forward",
+                "kind": kind,
+                "when": when,
+                "limit": DEFAULT_EDGE_LIMIT,
+            }
+        )
+    return {"entry": node_ids[0], "nodes": nodes, "edges": edges}
+
+
 def _agent_count(block: dict[str, Any] | None) -> int:
     ids: list[str] = []
     _collect_agent_ids(block, ids)
@@ -303,21 +455,23 @@ def _agent_count(block: dict[str, Any] | None) -> int:
 def normalize_pipeline_flow(payload: dict[str, Any] | None) -> dict[str, Any]:
     if not payload or not isinstance(payload, dict):
         return default_pipeline_flow()
+    btype = str(payload.get("type") or "").strip().lower()
+    if btype == "stages":
+        return _normalize_stages(payload)
+    if btype == "sequence":
+        converted, err = _sequence_to_stages(payload)
+        if err:
+            raise ValueError(err)
+        return converted
     block = _normalize_block(payload, ids_seen=set(), counter={"if": 0, "loop": 0})
-    if block.get("type") != "sequence":
-        block = {"type": "sequence", "children": [block]}
-    ids: list[str] = []
-    _collect_agent_ids(block, ids)
-    if not ids:
-        raise ValueError("pipeline_flow must include at least one agent")
-    dupes = {i for i in ids if ids.count(i) > 1}
-    if dupes:
-        raise ValueError(f"Duplicate agent in flow: {sorted(dupes)[0]}")
-    allowed = known_agent_ids()
-    for agent_id in ids:
-        if agent_id not in allowed:
-            raise ValueError(f"Unknown agent node: {agent_id}")
-    return block
+    if block.get("type") == "stages":
+        return block
+    converted, err = _sequence_to_stages(
+        block if block.get("type") == "sequence" else {"type": "sequence", "children": [block]}
+    )
+    if err:
+        raise ValueError(err)
+    return converted
 
 
 def _normalize_block(raw: Any, ids_seen: set[str], counter: dict[str, int]) -> dict[str, Any]:
@@ -326,6 +480,10 @@ def _normalize_block(raw: Any, ids_seen: set[str], counter: dict[str, int]) -> d
     btype = str(raw.get("type") or "").strip().lower()
     if btype not in FLOW_TYPES:
         raise ValueError(f"Invalid flow type: {btype or '(empty)'}")
+    if btype == "stages":
+        return _normalize_stages(raw)
+    if btype == "stage":
+        return {"type": "stages", "children": [_normalize_stage(raw, 0)]}
     if btype == "agent":
         agent_id = str(raw.get("id") or "").strip()
         if not agent_id:
@@ -389,6 +547,8 @@ def compile_pipeline_flow(
     positions: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, Any]:
     flow = normalize_pipeline_flow(flow)
+    if flow.get("type") == "stages":
+        return _compile_stages(flow, positions or {})
     compiler = _FlowCompiler(positions or {})
     exits = compiler.compile_seq(flow, incoming=[])
     if not compiler.nodes:
@@ -604,21 +764,85 @@ def _topology(graph: dict[str, Any]) -> set[tuple[str, str, str, str]]:
 
 
 def infer_pipeline_flow(graph: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    """Best-effort structured flow from a graph. None if Arrange cannot represent it."""
+    """Best-effort stages flow from a graph. None if Arrange cannot represent it."""
     try:
         graph = normalize_pipeline_graph(graph)
-        flow = _infer_from_spine(graph)
+        flow = _infer_stages_from_graph(graph)
         compiled = compile_pipeline_flow(
             flow,
             {n["id"]: n["position"] for n in graph.get("nodes") or []},
         )
         if {n["id"] for n in compiled["nodes"]} != {n["id"] for n in graph["nodes"]}:
-            return None, "Arrange needs a single Then/Else per If."
+            return None, "Arrange needs one IF per stage."
         if _topology(compiled) != _topology(graph):
-            return None, "Arrange needs a single Then/Else per If."
+            return None, "Arrange needs one IF per stage."
         return flow, None
     except (ValueError, KeyError, TypeError) as exc:
-        return None, str(exc) or "Arrange needs a single Then/Else per If."
+        return None, str(exc) or "Arrange needs one IF per stage."
+
+
+def _infer_stages_from_graph(graph: dict[str, Any]) -> dict[str, Any]:
+    node_ids = [n["id"] for n in graph.get("nodes") or []]
+    if not node_ids:
+        raise ValueError("pipeline_graph.nodes must include at least one agent")
+    outgoing: dict[str, list[dict[str, Any]]] = {nid: [] for nid in node_ids}
+    for edge in graph.get("edges") or []:
+        src = edge.get("source")
+        if src in outgoing:
+            outgoing[src].append(edge)
+    stages: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    current = graph.get("entry") or node_ids[0]
+    while current and current not in seen:
+        seen.add(current)
+        edges = outgoing.get(current) or []
+        if len(edges) > 1:
+            raise ValueError("Arrange needs one IF per stage.")
+        if not edges:
+            break
+        edge = edges[0]
+        when = edge.get("when") or {}
+        wtype = when.get("type") or "always"
+        target = str(edge.get("target") or "")
+        if wtype in ("always", "on_success") and not when.get("invert"):
+            stages.append(
+                {
+                    "type": "stage",
+                    "agent_id": current,
+                    "action": "proceed",
+                    "then": "proceed",
+                    "next_agent_id": target,
+                }
+            )
+        elif wtype == "on_status":
+            invert = bool(when.get("invert"))
+            stages.append(
+                {
+                    "type": "stage",
+                    "agent_id": current,
+                    "action": "if_not" if invert else "if",
+                    "result_op": "equal",
+                    "expected": str(when.get("status") or ""),
+                    "then": "proceed",
+                    "next_agent_id": target,
+                }
+            )
+        else:
+            raise ValueError("Arrange needs one IF per stage.")
+        current = target
+    unused = [nid for nid in node_ids if nid not in seen]
+    if unused:
+        raise ValueError("Arrange needs one IF per stage.")
+    if not stages:
+        stages = [
+            {
+                "type": "stage",
+                "agent_id": node_ids[0],
+                "action": "proceed",
+                "then": "stop",
+            }
+        ]
+    return _normalize_stages({"type": "stages", "children": stages})
 
 
 def _infer_from_spine(graph: dict[str, Any]) -> dict[str, Any]:
@@ -1001,13 +1225,16 @@ def reset_pipeline_bundle() -> dict[str, Any]:
 def edge_matches(when: dict[str, Any], status: str) -> bool:
     wtype = when.get("type") or "always"
     if wtype in ("always", "on_success"):
-        return status in ("done", "success")
+        return status in ("done", "success", "pass")
     if wtype == "on_failure":
-        return status in ("failed", "failure", "error")
+        return status in ("failed", "failure", "error", "fail")
     if wtype == "on_retry":
         return status == "retry"
     if wtype == "on_status":
-        return status == when.get("status")
+        matched = status == when.get("status")
+        if when.get("invert"):
+            return not matched
+        return matched
     return False
 
 
@@ -1071,10 +1298,6 @@ def visit_cap_for(graph: dict[str, Any], node_id: str) -> int:
 
 
 def agent_display_name(agent_id: str) -> str:
-    names = get_agent_display_names()
-    if agent_id in names:
-        return names[agent_id]
-    meta = AGENT_BY_ID.get(agent_id)
-    if meta:
-        return meta["name"]
-    return agent_id.replace("_", " ").title()
+    from .config_loader import agent_company_label
+
+    return agent_company_label(agent_id)

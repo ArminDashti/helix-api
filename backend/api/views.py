@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import time
-from typing import Any, Iterator
+from datetime import datetime, timezone
+from typing import Any
 
 from django.http import HttpRequest, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -33,6 +33,7 @@ from .config_loader import (
     known_agent_ids,
     set_agent_disabled,
     update_agent_display_name,
+    update_agent_fields,
     update_cursor_settings,
     update_database_settings,
     update_openrouter_settings,
@@ -43,19 +44,15 @@ from .demo import (
     VALID_LANGUAGES,
     VALID_MODES,
     VALID_REPORT_TYPES,
-    get_demo_result,
 )
 from .pipeline_graph import (
-    MAX_STEPS,
-    agent_display_name,
-    circuit_open_edge,
-    edge_limit,
     get_pipeline_bundle,
-    get_pipeline_graph,
-    next_edge,
     reset_pipeline_bundle,
     update_pipeline_bundle,
 )
+from .llm_client import require_llm
+from . import org
+from .pipeline_run import pipeline_events, run_pipeline_sync
 
 
 def _json_body(request: HttpRequest) -> dict[str, Any]:
@@ -81,7 +78,16 @@ def _error(message: str, status: int = 400) -> JsonResponse:
 @require_http_methods(["GET"])
 def health(request: HttpRequest) -> JsonResponse:
     """Report connectivity for helix-api, SQL database, and LLM providers."""
-    api = {"status": "connected"}
+    checked_at = datetime.now(timezone.utc).isoformat()
+
+    def stamp(block: dict[str, Any]) -> dict[str, Any]:
+        out = dict(block)
+        if "detail" not in out:
+            out["detail"] = ""
+        out["checked_at"] = checked_at
+        return out
+
+    api = stamp({"status": "connected"})
 
     db = get_database_settings()
     engine = get_database_engine()
@@ -104,7 +110,7 @@ def health(request: HttpRequest) -> JsonResponse:
                 cur = conn.cursor()
                 cur.execute("SELECT 1")
                 cur.fetchone()
-            database = {"status": "connected", "engine": engine}
+            database = {"status": "connected", "engine": engine, "detail": ""}
         except Exception as exc:  # noqa: BLE001 — surface any driver/network error
             database = {
                 "status": "disconnected",
@@ -113,7 +119,7 @@ def health(request: HttpRequest) -> JsonResponse:
             }
 
     if get_openrouter_token():
-        openrouter: dict[str, Any] = {"status": "configured"}
+        openrouter: dict[str, Any] = {"status": "configured", "detail": ""}
     else:
         openrouter = {
             "status": "missing_token",
@@ -121,7 +127,7 @@ def health(request: HttpRequest) -> JsonResponse:
         }
 
     if get_cursor_token():
-        cursor: dict[str, Any] = {"status": "configured"}
+        cursor: dict[str, Any] = {"status": "configured", "detail": ""}
     else:
         cursor = {
             "status": "missing_token",
@@ -133,89 +139,48 @@ def health(request: HttpRequest) -> JsonResponse:
         {
             "ok": ok,
             "api": api,
-            "database": database,
-            "openrouter": openrouter,
-            "cursor": cursor,
+            "database": stamp(database),
+            "openrouter": stamp(openrouter),
+            "cursor": stamp(cursor),
             "provider": get_provider(),
         }
     )
 
 
-# --- Agents / instructions ---
+# --- Agents ---
 
 
 @csrf_exempt
 @require_http_methods(["GET", "PUT", "POST"])
 def agents_list(request: HttpRequest) -> JsonResponse:
     if request.method == "GET":
-        return JsonResponse({"agents": store.list_agents_with_instructions()})
+        return JsonResponse({"agents": store.list_agents()})
     if request.method == "POST":
         try:
             body = _json_body(request)
         except ValueError as exc:
             return _error(str(exc))
         agent_id = body.get("id") or ""
-        name = body.get("name") or ""
+        name = body.get("role") or body.get("name") or ""
         description = body.get("description") or ""
-        instruction = body.get("instruction", "")
+        human_name = body.get("human_name") or ""
         try:
             created = create_custom_agent(
                 str(agent_id),
                 str(name),
                 str(description) if description is not None else "",
-                instruction=instruction if isinstance(instruction, str) else str(instruction or ""),
+                human_name=str(human_name) if human_name is not None else "",
             )
         except ValueError as exc:
             return _error(str(exc), 400)
         return JsonResponse(created, status=201)
-    # PUT bulk update: { "instructions": { "task_validator": "..." } }
-    try:
-        body = _json_body(request)
-    except ValueError as exc:
-        return _error(str(exc))
-    instructions = body.get("instructions") or {}
-    if not isinstance(instructions, dict):
-        return _error("instructions must be an object")
-    known = known_agent_ids()
-    updated = []
-    for agent_id, content in instructions.items():
-        if agent_id not in known:
-            return _error(f"Unknown agent: {agent_id}")
-        store.set_instruction(agent_id, content if isinstance(content, str) else str(content))
-        updated.append(agent_id)
-    return JsonResponse({"updated": updated, "agents": store.list_agents_with_instructions()})
+    return _error("Bulk instruction updates are no longer supported", 410)
 
 
 @csrf_exempt
 @require_http_methods(["GET", "PUT"])
 def agent_instruction(request: HttpRequest, agent_id: str) -> JsonResponse:
-    known = known_agent_ids()
-    if agent_id not in known:
-        return _error(f"Unknown agent: {agent_id}", 404)
-    try:
-        meta = get_agent_meta(agent_id)
-    except KeyError:
-        return _error(f"Unknown agent: {agent_id}", 404)
-    if request.method == "GET":
-        names = get_agent_display_names()
-        return JsonResponse(
-            {
-                **meta,
-                "name": names.get(agent_id, meta["name"]),
-                "instruction": store.get_instruction(agent_id),
-            }
-        )
-    try:
-        body = _json_body(request)
-    except ValueError as exc:
-        return _error(str(exc))
-    content = body.get("instruction", body.get("content", ""))
-    if content is None:
-        content = ""
-    if not isinstance(content, str):
-        return _error("instruction must be a string")
-    saved = store.set_instruction(agent_id, content)
-    return JsonResponse({**meta, "instruction": saved})
+    return _error("Agents use rules and skills only; instructions are removed", 410)
 
 
 # --- References ---
@@ -506,8 +471,10 @@ def agent_rename(request: HttpRequest, agent_id: str) -> JsonResponse:
         body = _json_body(request)
     except ValueError as exc:
         return _error(str(exc))
-    name = body.get("name")
+    name = body.get("role") if "role" in body else body.get("name")
     disabled = body.get("disabled")
+    human_name = body.get("human_name")
+    description = body.get("description")
     if name is not None:
         if not isinstance(name, str):
             return _error("name must be a string")
@@ -520,6 +487,17 @@ def agent_rename(request: HttpRequest, agent_id: str) -> JsonResponse:
     if disabled is not None:
         try:
             set_agent_disabled(agent_id, bool(disabled))
+        except KeyError:
+            return _error(f"Unknown agent: {agent_id}", 404)
+    if human_name is not None or description is not None:
+        try:
+            update_agent_fields(
+                agent_id,
+                human_name=str(human_name) if human_name is not None else None,
+                description=str(description) if description is not None else None,
+            )
+        except ValueError as exc:
+            return _error(str(exc))
         except KeyError:
             return _error(f"Unknown agent: {agent_id}", 404)
     try:
@@ -801,144 +779,6 @@ def admin_pipeline_graph(request: HttpRequest) -> JsonResponse:
 # --- Run SSE ---
 
 
-def _sse(data: dict[str, Any]) -> str:
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-
-def _pipeline_events(
-    prompt: str,
-    mode: str,
-    *,
-    language: str = "en",
-    report_type: str | None = None,
-    chart_type: str | None = None,
-    columns: list[str] | None = None,
-) -> Iterator[str]:
-    """Walk the configured conditional DAG and emit step/result SSE events."""
-    provider = get_provider()
-    graph = get_pipeline_graph()
-    delay = 0.55
-    messages = {
-        "task_validator": "Checking prompt feasibility and mode…",
-        "solution_strategist": "Drafting a non-technical solution narrative…",
-        "technical_architect": "Building the technical blueprint…",
-        "code_builder": "Implementing sandbox analysis code…",
-        "sql_guardian": "Reviewing SQL for safety and allowlist compliance…",
-        "implementation_auditor": "Auditing implementation against the blueprint…",
-        "response_publisher": "Packaging chart and report for the UI…",
-    }
-
-    yield _sse(
-        {
-            "event": "step",
-            "agent_id": "user",
-            "status": "done",
-            "message": f"Received prompt ({mode}/{language}) via {provider}: {prompt[:120]}",
-        }
-    )
-    time.sleep(0.25)
-
-    def _result() -> dict:
-        return get_demo_result(
-            mode,
-            language=language,
-            report_type=report_type,
-            chart_type=chart_type,
-            columns=columns,
-        )
-
-    entry = graph.get("entry")
-    if not entry:
-        result = _result()
-        yield _sse({"event": "result", **result, "used_demo": True})
-        return
-
-    edge_uses: dict[str, int] = {}
-    visits: dict[str, int] = {}
-    current: str | None = entry
-    steps = 0
-
-    def pick_next(source: str, status: str) -> tuple[str | None, str | None]:
-        edge = next_edge(graph, source, status, edge_uses)
-        if edge:
-            eid = str(edge.get("id") or "")
-            edge_uses[eid] = edge_uses.get(eid, 0) + 1
-            return str(edge["target"]), None
-        blocked = circuit_open_edge(graph, source, status, edge_uses)
-        if blocked:
-            cap = edge_limit(blocked)
-            return None, f"Circuit open: edge {blocked.get('id')} limit {cap}"
-        return None, None
-
-    while current and steps < MAX_STEPS:
-        steps += 1
-        visits[current] = visits.get(current, 0) + 1
-
-        display = agent_display_name(current)
-        yield _sse(
-            {
-                "event": "step",
-                "agent_id": current,
-                "status": "running",
-                "message": messages.get(current, f"Running {display}…"),
-            }
-        )
-        time.sleep(delay)
-
-        # Demo stub: sql_guardian emits one retry on first visit only
-        if current == "sql_guardian" and visits[current] == 1:
-            retry_to, circuit_msg = pick_next(current, "retry")
-            if circuit_msg:
-                yield _sse(
-                    {
-                        "event": "step",
-                        "agent_id": current,
-                        "status": "failed",
-                        "message": circuit_msg,
-                    }
-                )
-                break
-            if retry_to:
-                yield _sse(
-                    {
-                        "event": "step",
-                        "agent_id": current,
-                        "status": "retry",
-                        "message": "Minor SQL tweak requested — following retry edge…",
-                        "retry_to": retry_to,
-                    }
-                )
-                time.sleep(delay * 0.5)
-                current = retry_to
-                continue
-
-        yield _sse(
-            {
-                "event": "step",
-                "agent_id": current,
-                "status": "done",
-                "message": f"{display} complete",
-            }
-        )
-        time.sleep(0.2)
-
-        nxt, circuit_msg = pick_next(current, "done")
-        if circuit_msg:
-            yield _sse(
-                {
-                    "event": "step",
-                    "agent_id": current,
-                    "status": "failed",
-                    "message": circuit_msg,
-                }
-            )
-            break
-        current = nxt
-
-    result = _result()
-    yield _sse({"event": "result", **result, "used_demo": True})
-
-
 def _parse_run_options(
     body: dict[str, Any],
 ) -> tuple[str, str, str, str | None, str | None, list[str] | None] | JsonResponse:
@@ -951,14 +791,14 @@ def _parse_run_options(
 
     if mode not in VALID_MODES:
         return _error(
-            "mode must be auto, chart, analytical_report, grid, or analytical_report_chart"
+            "mode must be auto, chart, grid, research, analytical_report, or analytical_report_chart"
         )
     if language not in VALID_LANGUAGES:
         return _error("language must be en or fa")
     if not prompt:
         return _error("prompt is required")
     if report_type is not None and report_type not in VALID_REPORT_TYPES:
-        return _error("report_type must be deep, summary, or simple")
+        return _error("report_type must be low, medium, or high")
     if chart_type is not None and chart_type not in VALID_CHART_TYPES:
         return _error("chart_type is invalid")
 
@@ -988,8 +828,13 @@ def runs_stream(request: HttpRequest) -> HttpResponse:
         return parsed
     prompt, mode, language, report_type, chart_type, columns = parsed
 
+    try:
+        require_llm()
+    except ValueError as exc:
+        return _error(str(exc), 400)
+
     response = StreamingHttpResponse(
-        _pipeline_events(
+        pipeline_events(
             prompt,
             mode,
             language=language,
@@ -1016,12 +861,64 @@ def chat(request: HttpRequest) -> JsonResponse:
     parsed = _parse_run_options(body)
     if isinstance(parsed, JsonResponse):
         return parsed
-    _prompt, mode, language, report_type, chart_type, columns = parsed
-    result = get_demo_result(
-        mode,
-        language=language,
-        report_type=report_type,
-        chart_type=chart_type,
-        columns=columns,
-    )
-    return JsonResponse({**result, "used_demo": True})
+    prompt, mode, language, report_type, chart_type, columns = parsed
+    try:
+        require_llm()
+    except ValueError as exc:
+        return _error(str(exc), 400)
+    try:
+        result = run_pipeline_sync(
+            prompt,
+            mode,
+            language=language,
+            report_type=report_type,
+            chart_type=chart_type,
+            columns=columns,
+        )
+    except ValueError as exc:
+        return _error(str(exc), 502)
+    return JsonResponse(result)
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def admin_users(request: HttpRequest) -> JsonResponse:
+    if request.method == "GET":
+        return JsonResponse({"users": org.list_users()})
+    try:
+        body = _json_body(request)
+    except ValueError as exc:
+        return _error(str(exc))
+    try:
+        item = org.create_user(
+            str(body.get("username") or ""),
+            str(body.get("display_name") or ""),
+            is_admin=bool(body.get("is_admin")),
+        )
+    except ValueError as exc:
+        return _error(str(exc))
+    return JsonResponse(item, status=201)
+
+
+@csrf_exempt
+@require_http_methods(["PUT", "PATCH", "DELETE"])
+def admin_user_detail(request: HttpRequest, user_id: str) -> JsonResponse:
+    if request.method == "DELETE":
+        try:
+            org.delete_user(user_id)
+        except KeyError:
+            return _error(f"Unknown user: {user_id}", 404)
+        except ValueError as exc:
+            return _error(str(exc))
+        return JsonResponse({"deleted": user_id})
+    try:
+        body = _json_body(request)
+    except ValueError as exc:
+        return _error(str(exc))
+    try:
+        item = org.update_user(user_id, body)
+    except KeyError:
+        return _error(f"Unknown user: {user_id}", 404)
+    except ValueError as exc:
+        return _error(str(exc))
+    return JsonResponse(item)

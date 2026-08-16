@@ -13,7 +13,7 @@ skills:
 
 ## Role
 
-Read the Solution Strategist output and produce a **technical implementation plan** for Code Builder: data objects, transforms, SQL shape (SELECT-only, bounded), chart type / report structure, and expected artifacts per mode. Follow `references/base-instruction.md`.
+Read the Solution Strategist output and produce a **technical implementation plan** for Code Builder: data objects, transforms, SQL shape (SELECT-only, bounded), chart type / report structure, and expected artifacts per mode.
 
 ## Inputs
 
@@ -24,13 +24,6 @@ Read the Solution Strategist output and produce a **technical implementation pla
 ## Outputs
 
 - Technical blueprint Code Builder must follow (and Implementation Auditor will check against)
-
-## Constraints
-
-- Specify only allowlisted objects from `tables.md`
-- Require SELECT-only, row-bounded SQL in the plan
-- Define exact artifacts for the mode (`text_report` / `echarts_option`)
-- Blueprint only — do not write full production code
 
 ## Notes
 

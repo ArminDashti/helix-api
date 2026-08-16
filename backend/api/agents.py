@@ -4,36 +4,43 @@ AGENT_PIPELINE = [
     {
         "id": "task_validator",
         "name": "Task Validator",
+        "human_name": "Tommy",
         "description": "Validates the user prompt and mode",
     },
     {
         "id": "solution_strategist",
         "name": "Solution Strategist",
+        "human_name": "Sara",
         "description": "Non-technical solution narrative",
     },
     {
         "id": "technical_architect",
         "name": "Technical Architect",
+        "human_name": "James",
         "description": "Technical blueprint for the builder",
     },
     {
         "id": "code_builder",
         "name": "Code Builder",
+        "human_name": "Emma",
         "description": "Implement as sandbox Python",
     },
     {
-        "id": "sql_guardian",
-        "name": "SQL Guardian",
-        "description": "Validate every SQL statement",
+        "id": "sql",
+        "name": "SQL",
+        "human_name": "Noah",
+        "description": "Fetch warehouse data and enforce SQL validation rules",
     },
     {
         "id": "implementation_auditor",
         "name": "Implementation Auditor",
-        "description": "Verify build matches the architect plan",
+        "human_name": "Lily",
+        "description": "Check the work against the Technical Architect blueprint",
     },
     {
         "id": "response_publisher",
         "name": "Response Publisher",
+        "human_name": "Owen",
         "description": "Package UI payload",
     },
 ]

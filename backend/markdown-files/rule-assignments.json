@@ -1,31 +1,4 @@
 {
-  "security": [
-    "task_validator",
-    "solution_strategist",
-    "technical_architect",
-    "code_builder",
-    "sql_guardian",
-    "implementation_auditor",
-    "response_publisher"
-  ],
-  "output-contract": [
-    "task_validator",
-    "solution_strategist",
-    "technical_architect",
-    "code_builder",
-    "sql_guardian",
-    "implementation_auditor",
-    "response_publisher"
-  ],
-  "base-behavior": [
-    "task_validator",
-    "solution_strategist",
-    "technical_architect",
-    "code_builder",
-    "sql_guardian",
-    "implementation_auditor",
-    "response_publisher"
-  ],
   "feasibility": [
     "task_validator"
   ],
@@ -39,12 +12,45 @@
     "code_builder"
   ],
   "select-only": [
-    "sql_guardian"
+    "sql"
   ],
   "verify-plan": [
     "implementation_auditor"
   ],
   "package-payload": [
+    "response_publisher"
+  ],
+  "security": [
+    "task_validator",
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "implementation_auditor",
+    "response_publisher"
+  ],
+  "output-contract": [
+    "task_validator",
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "implementation_auditor",
+    "response_publisher"
+  ],
+  "base-behavior": [
+    "task_validator",
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "implementation_auditor",
+    "response_publisher"
+  ],
+  "product-scope": [
+    "task_validator",
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "sql",
+    "implementation_auditor",
     "response_publisher"
   ]
 }

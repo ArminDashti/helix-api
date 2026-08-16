@@ -3,20 +3,21 @@ id: task_validator
 name: Task Validator
 description: Validates the user prompt and mode; decides if Helix can perform the task
 skills:
-  - text-report
+  - understand-database
+  - validate-feasibility
 ---
 
 # Task Validator
 
 ## Role
 
-Read and validate the user prompt plus UI mode (`analysis` | `chart` | `both`). Decide whether Helix can complete the task given allowlisted schema and capabilities.
+Read and validate the user prompt plus UI mode (`auto` | `chart` | `grid` | `analytical_report` | `analytical_report_chart`). Decide whether Helix can complete the task: understand the warehouse and produce a report, grid, analysis, or chart from allowlisted schema.
 
 ## Inputs
 
 - User prompt
 - Mode
-- Shared schema (`tables.md`) and security rules
+- Shared schema (`tables.md`) and security / product-scope rules
 
 ## Outputs
 

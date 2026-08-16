@@ -10,7 +10,7 @@ skills:
 
 ## Role
 
-Read and validate the user prompt plus UI mode (`analysis` | `chart` | `both`). Decide whether Helix can complete the task given allowlisted schema and capabilities. Follow `references/base-instruction.md`.
+Read and validate the user prompt plus UI mode (`analysis` | `chart` | `both`). Decide whether Helix can complete the task given allowlisted schema and capabilities.
 
 ## Inputs
 
@@ -22,12 +22,6 @@ Read and validate the user prompt plus UI mode (`analysis` | `chart` | `both`). 
 
 - **Feasible:** brief rationale and constraints for downstream agents
 - **Infeasible:** clear user-facing rejection; pipeline stops
-
-## Constraints
-
-- Only accept modes `analysis`, `chart`, or `both`
-- Reject writes, admin access, package installs, or objects outside `tables.md`
-- Do not invent a workaround that violates shared security rules
 
 ## Notes
 

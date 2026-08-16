@@ -1,1 +1,62 @@
-{}
+{
+  "shared/understand-database": [
+    "task_validator",
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "sql",
+    "implementation_auditor"
+  ],
+  "shared/generate-grid": [
+    "technical_architect",
+    "code_builder",
+    "response_publisher"
+  ],
+  "shared/generate-analytical-report": [
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "response_publisher"
+  ],
+  "shared/text-report": [
+    "solution_strategist",
+    "technical_architect",
+    "code_builder",
+    "response_publisher"
+  ],
+  "shared/echarts-response": [
+    "technical_architect",
+    "code_builder",
+    "response_publisher"
+  ],
+  "shared/sql-safety": [
+    "technical_architect",
+    "code_builder",
+    "sql"
+  ],
+  "shared/sandbox-python": [
+    "technical_architect",
+    "code_builder"
+  ],
+  "task_validator/validate-feasibility": [
+    "task_validator"
+  ],
+  "solution_strategist/craft-solution-narrative": [
+    "solution_strategist"
+  ],
+  "technical_architect/write-technical-blueprint": [
+    "technical_architect"
+  ],
+  "code_builder/implement-sandbox-script": [
+    "code_builder"
+  ],
+  "sql/review-sql-statements": [
+    "sql"
+  ],
+  "implementation_auditor/audit-against-blueprint": [
+    "implementation_auditor"
+  ],
+  "response_publisher/package-ui-payload": [
+    "response_publisher"
+  ]
+}

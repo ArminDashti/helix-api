@@ -3,7 +3,8 @@
 #
 # Paste OpenRouter / Cursor API keys in the Settings UI. They are stored here as
 # openrouter.token / cursor.token (never returned by the API).
-# Active LLM provider: openrouter | cursor
+# provider: openrouter uses OpenAI-compatible chat completions.
+# provider: cursor uses Cursor Cloud Agents API (POST /v1/agents, poll run).
 provider: openrouter
 
 # Models are suggestions only — use any OpenRouter model ids you prefer.
@@ -12,43 +13,43 @@ provider: openrouter
 openrouter:
   token_env: OPENROUTER_TOKEN
   app_name: "Helix"
-  default_model: "openai/gpt-4o-mini"
+  default_model: "auto"
   agents:
     task_validator:
-      model: "openai/gpt-4o-mini"
+      model: "auto"
     solution_strategist:
-      model: "anthropic/claude-sonnet-4"
+      model: "auto"
     technical_architect:
-      model: "openai/gpt-4o"
+      model: "auto"
     code_builder:
-      model: "anthropic/claude-sonnet-4"
-    sql_guardian:
-      model: "openai/gpt-4o-mini"
+      model: "auto"
+    sql:
+      model: "auto"
     implementation_auditor:
-      model: "openai/gpt-4o-mini"
+      model: "auto"
     response_publisher:
-      model: "openai/gpt-4o-mini"
+      model: "auto"
 
 
 cursor:
   token_env: CURSOR_API_KEY
   app_name: "Helix"
-  default_model: "composer-2"
+  default_model: "auto"
   agents:
     task_validator:
-      model: "composer-2"
+      model: "auto"
     solution_strategist:
-      model: "composer-2"
+      model: "auto"
     technical_architect:
-      model: "composer-2"
+      model: "auto"
     code_builder:
-      model: "composer-2"
-    sql_guardian:
-      model: "composer-2"
+      model: "auto"
+    sql:
+      model: "auto"
     implementation_auditor:
-      model: "composer-2"
+      model: "auto"
     response_publisher:
-      model: "composer-2"
+      model: "auto"
 app:
   secret_key: "change-me"
   debug: true
@@ -96,14 +97,14 @@ sandbox:
   max_verify_retries: 2 # auditor fail → code_builder
   max_rows: 10000
 
-sql_guardian:
-  max_retries: 3 # reject → code_builder
+sql:
+  max_retries: 3
   require_row_limit: true # TOP / FETCH / LIMIT (unless pure aggregate)
   forbid_select_star: true
   max_rows: 10000 # align with sandbox.max_rows
 
 # Pipeline layout is stored in helix.config.yaml as pipeline_graph (runner)
-# and pipeline_flow (Arrange / Graph structured IF-ELSE and Loop). Edit in the UI.
+# and pipeline_flow (Arrange stages: IF / IF NOT / Proceed). Edit in the UI.
 
 # Optional user-defined agents (not part of the Analysis runtime pipeline).
 # custom_agents:

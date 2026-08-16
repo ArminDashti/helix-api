@@ -38,6 +38,8 @@ urlpatterns = [
         name="admin-cursor-models",
     ),
     path("admin/pipeline-graph/", views.admin_pipeline_graph, name="admin-pipeline-graph"),
+    path("admin/users/", views.admin_users, name="admin-users"),
+    path("admin/users/<str:user_id>/", views.admin_user_detail, name="admin-user-detail"),
     path("runs/stream", views.runs_stream, name="runs-stream"),
     path("chat", views.chat, name="chat"),
 ]

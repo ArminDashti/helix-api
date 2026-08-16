@@ -1,0 +1,21 @@
+---
+description: Keep warehouse access SELECT-only; no writes, DDL, or EXEC
+globs: backend/api/sql*.py,backend/api/db_*.py,backend/api/db_dialects/**
+alwaysApply: false
+---
+
+# Helix SELECT-only warehouse
+
+- All agent and explorer fetches go through dialect `select_rows` or `execute_select`.
+- Keep `validate_select` and `FORBIDDEN_SQL` (INSERT/UPDATE/DELETE/MERGE/DDL/`EXEC`/`sp_`).
+- Do not add stored-procedure execution or multi-statement write batches.
+- Bound result rows (`max_rows` / TOP / FETCH / LIMIT). Honor `forbid_select_star` when set.
+
+```python
+# BAD: execute arbitrary SQL from the model
+cursor.execute(user_sql)
+
+# GOOD: validate then execute SELECT only
+sql = validate_select(user_sql)
+return execute_select(sql)
+```

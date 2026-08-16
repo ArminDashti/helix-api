@@ -19,6 +19,7 @@ RULE_ID_MIGRATION = {
     "shared-00-security": "security",
     "shared-01-output-contract": "output-contract",
     "shared-02-base-behavior": "base-behavior",
+    "shared-03-product-scope": "product-scope",
     "task_validator-10-feasibility": "feasibility",
     "solution_strategist-10-non-technical": "non-technical",
     "technical_architect-10-blueprint": "blueprint",
@@ -39,6 +40,7 @@ RULE_DISPLAY_NAMES = {
     "select-only": "Select only",
     "verify-plan": "Verify plan",
     "package-payload": "Package payload",
+    "product-scope": "Product scope",
 }
 
 SKILL_DISPLAY_NAMES = {
@@ -53,6 +55,9 @@ SKILL_DISPLAY_NAMES = {
     "review-sql-statements": "Review SQL statements",
     "audit-against-blueprint": "Audit against blueprint",
     "package-ui-payload": "Package UI payload",
+    "understand-database": "Understand database",
+    "generate-grid": "Generate grid",
+    "generate-analytical-report": "Generate analytical report",
 }
 
 
@@ -337,10 +342,113 @@ def save_skill_assignments(assignments: dict[str, list[str]]) -> dict[str, list[
     return cleaned
 
 
-def _default_skill_agents(scope: str) -> list[str]:
+def _parse_agent_md_skill_ids(agent_id: str) -> list[str]:
+    path = _agents_source_dir() / agent_id / "AGENT.md"
+    if not path.is_file():
+        return []
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return []
+    rest = text[3:]
+    if rest.startswith("\n"):
+        rest = rest[1:]
+    end = rest.find("\n---")
+    if end < 0:
+        return []
+    try:
+        data = yaml.safe_load(rest[:end]) or {}
+    except yaml.YAMLError:
+        return []
+    if not isinstance(data, dict):
+        return []
+    raw = data.get("skills") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _skill_exists_in_shared(skill_id: str) -> bool:
+    runtime = skills_dir() / "shared" / skill_id / "SKILL.md"
+    source = _agents_source_dir() / "_shared" / "skills" / skill_id / "SKILL.md"
+    return runtime.is_file() or source.is_file()
+
+
+def default_skill_assignments() -> dict[str, list[str]]:
+    """Map scope/skill_id → pipeline agents listed in each AGENT.md."""
+    known = set(AGENT_IDS)
+    inverted: dict[str, list[str]] = {}
+    for agent_id in AGENT_IDS:
+        for skill_id in _parse_agent_md_skill_ids(agent_id):
+            scope = "shared" if _skill_exists_in_shared(skill_id) else agent_id
+            key = _skill_assign_key(scope, skill_id)
+            agents = inverted.setdefault(key, [])
+            if agent_id in known and agent_id not in agents:
+                agents.append(agent_id)
+    return inverted
+
+
+def default_rule_assignments() -> dict[str, list[str]]:
+    """Shared rules → all pipeline agents; per-agent rules → that agent."""
+    agents_root = _agents_source_dir()
+    assignments: dict[str, list[str]] = {}
+    for agent_id in AGENT_IDS:
+        rules_folder = agents_root / agent_id / "rules"
+        if not rules_folder.is_dir():
+            continue
+        for rule_file in sorted(rules_folder.glob("*.md")):
+            stem = _strip_numeric_prefix(rule_file.stem)
+            bucket = assignments.setdefault(stem, [])
+            if agent_id not in bucket:
+                bucket.append(agent_id)
+    shared_rules = agents_root / "_shared" / "rules"
+    if shared_rules.is_dir():
+        for rule_file in sorted(shared_rules.glob("*.md")):
+            stem = _strip_numeric_prefix(rule_file.stem)
+            assignments[stem] = list(AGENT_IDS)
+    return assignments
+
+
+def ensure_default_rule_assignments() -> None:
+    """Fill missing rule → agent rows from the agent army defaults."""
+    ensure_dirs()
+    defaults = default_rule_assignments()
+    current = load_assignments()
+    changed = False
+    for rule_id, agents in defaults.items():
+        if rule_id not in current or not current[rule_id]:
+            current[rule_id] = list(agents)
+            changed = True
+    if changed:
+        save_assignments(current)
+
+
+def ensure_default_skill_assignments() -> None:
+    """Fill missing skill → agent rows from each AGENT.md skills list."""
+    ensure_dirs()
+    defaults = default_skill_assignments()
+    current = load_skill_assignments()
+    all_ids = list(AGENT_IDS)
+    changed = False
+    for key, agents in defaults.items():
+        existing = current.get(key)
+        if not existing:
+            current[key] = list(agents)
+            changed = True
+        elif existing == all_ids and list(agents) != all_ids:
+            current[key] = list(agents)
+            changed = True
+    if changed:
+        save_skill_assignments(current)
+
+
+def _default_skill_agents(scope: str, skill_id: str) -> list[str]:
+    key = _skill_assign_key(scope, skill_id)
+    mapped = default_skill_assignments().get(key)
+    if mapped is not None:
+        return list(mapped)
     if scope == "shared":
-        return list(_agent_scope_ids())
-    return [scope]
+        return []
+    return [scope] if scope in _known_agent_ids() else []
 
 
 def _set_skill_agents(scope: str, skill_id: str, agents: list[str]) -> None:
@@ -354,7 +462,7 @@ def _skill_item(scope: str, skill_id: str, content: str) -> dict[str, Any]:
     meta = _parse_md_meta(content)
     key = _skill_assign_key(scope, skill_id)
     assigned = load_skill_assignments().get(key)
-    agents = assigned if assigned is not None else _default_skill_agents(scope)
+    agents = assigned if assigned is not None else _default_skill_agents(scope, skill_id)
     return {
         "id": skill_id,
         "scope": scope,
@@ -500,29 +608,15 @@ def _agents_source_dir() -> Path:
 
 
 def seed_if_empty() -> None:
-    """Seed instructions/rules from analytics/agents when store is empty."""
+    """Seed rules from analytics/agents when the rules store is empty."""
     ensure_dirs()
-    instr = instructions_dir()
-    existing = list(instr.glob("*.md"))
-    if existing:
+    if list(rules_dir().glob("*.md")):
         return
 
     agents_root = _agents_source_dir()
     assignments: dict[str, list[str]] = {}
 
     for agent_id in AGENT_IDS:
-        agent_md = agents_root / agent_id / "AGENT.md"
-        content = ""
-        if agent_md.exists():
-            content = agent_md.read_text(encoding="utf-8")
-        else:
-            meta = AGENT_BY_ID[agent_id]
-            content = (
-                f"# {meta['name']}\n\n{meta['description']}\n"
-            )
-        (instr / f"{agent_id}.md").write_text(content, encoding="utf-8")
-
-        # Agent-specific rules
         rules_folder = agents_root / agent_id / "rules"
         if rules_folder.is_dir():
             for rule_file in sorted(rules_folder.glob("*.md")):
@@ -536,7 +630,6 @@ def seed_if_empty() -> None:
                     )
                 assignments.setdefault(stem, []).append(agent_id)
 
-    # Shared rules → all agents
     shared_rules = agents_root / "_shared" / "rules"
     if shared_rules.is_dir():
         for rule_file in sorted(shared_rules.glob("*.md")):
@@ -559,24 +652,97 @@ def seed_if_empty() -> None:
 # --- Instructions ---
 
 
-def list_agents_with_instructions() -> list[dict]:
+def migrate_sql_agent_id() -> None:
+    """Rename leftover sql_guardian skill folders and assignment ids."""
     ensure_dirs()
-    # Lazy import avoids circular import at module load
+    old_skill = skills_dir() / "sql_guardian"
+    new_skill = skills_dir() / "sql"
+    if old_skill.is_dir() and not new_skill.exists():
+        old_skill.rename(new_skill)
+    assignments = load_assignments()
+    changed = False
+    for rule_id, agents in list(assignments.items()):
+        if not isinstance(agents, list):
+            continue
+        next_agents = ["sql" if a == "sql_guardian" else a for a in agents]
+        if next_agents != agents:
+            assignments[rule_id] = next_agents
+            changed = True
+    if changed:
+        save_assignments(assignments)
+    skill_asg = load_skill_assignments()
+    skill_changed = False
+    next_skill: dict[str, Any] = {}
+    for key, agents in skill_asg.items():
+        new_key = key.replace("sql_guardian/", "sql/") if isinstance(key, str) else key
+        if new_key != key:
+            skill_changed = True
+        if isinstance(agents, list):
+            mapped = ["sql" if a == "sql_guardian" else a for a in agents]
+            if mapped != agents:
+                skill_changed = True
+            next_skill[new_key] = mapped
+        else:
+            next_skill[new_key] = agents
+    if skill_changed:
+        save_skill_assignments(next_skill)
+
+
+def list_agents() -> list[dict]:
+    ensure_dirs()
     from .config_loader import get_agent_display_names
 
     names = get_agent_display_names()
     result = []
     for meta in _all_agent_metas():
-        path = instructions_dir() / f"{meta['id']}.md"
-        content = path.read_text(encoding="utf-8") if path.exists() else ""
         result.append(
             {
                 **meta,
                 "name": names.get(meta["id"], meta["name"]),
-                "instruction": content,
             }
         )
     return result
+
+
+def list_agents_with_instructions() -> list[dict]:
+    return list_agents()
+
+
+def assemble_agent_prompt(agent_id: str) -> str:
+    """Build the runtime prompt from the agent meta plus assigned rules and skills."""
+    from .config_loader import get_agent_meta
+
+    try:
+        meta = get_agent_meta(agent_id)
+    except KeyError:
+        meta = {"id": agent_id, "name": agent_id, "description": ""}
+    parts = [
+        f"# {meta.get('name') or agent_id}",
+        "",
+        str(meta.get("description") or "").strip(),
+        "",
+        "## Rules",
+        "",
+    ]
+    for rule in list_rules():
+        if rule.get("disabled"):
+            continue
+        if agent_id not in (rule.get("agents") or []):
+            continue
+        parts.append(f"### {rule.get('name') or rule.get('id')}")
+        parts.append(rule.get("content") or "")
+        parts.append("")
+    parts.append("## Skills")
+    parts.append("")
+    for skill in list_skills():
+        if skill.get("disabled"):
+            continue
+        if agent_id not in (skill.get("agents") or []):
+            continue
+        parts.append(f"### {skill.get('name') or skill.get('id')}")
+        parts.append(skill.get("content") or "")
+        parts.append("")
+    return "\n".join(parts).strip() + "\n"
 
 def get_instruction(agent_id: str) -> str:
     if agent_id not in _known_agent_ids():
@@ -670,7 +836,9 @@ def list_rules() -> list[dict]:
                 "disabled": bool(meta["disabled"]),
                 "filename": path.name,
                 "content": content,
-                "agents": assignments.get(path.stem, []),
+                "agents": assignments.get(
+                    path.stem, default_rule_assignments().get(path.stem, [])
+                ),
             }
         )
     return items
@@ -690,7 +858,7 @@ def get_rule(rule_id: str) -> dict:
         "disabled": bool(meta["disabled"]),
         "filename": path.name,
         "content": content,
-        "agents": assignments.get(stem, []),
+        "agents": assignments.get(stem, default_rule_assignments().get(stem, [])),
     }
 
 

@@ -1,17 +1,17 @@
 ---
 name: ECharts response
-description: Produce a valid Apache ECharts option JSON object for chart or both modes
+description: Produce a valid Apache ECharts option JSON object from fetched rows
 ---
 
 # ECharts response
 
 ## When to use
 
-- `mode=chart` or `mode=both`
+- `mode=chart`, `analytical_report_chart`, or `auto` when a chart is required
 
 ## Instructions
 
-1. Emit a single ECharts `option` object (title, axes/series or equivalent for the chart type).
-2. Prefer readable labels, legends, and units where applicable.
-3. Data in the option must come from allowlisted queries / sandbox results — no fabricated series.
+1. Emit a single ECharts `option` object (title, axes/series or equivalent).
+2. Use `chart_type`: `bar`, `line`, `area`, `pie`, `donut`, `scatter`, `stacked_bar`, `horizontal_bar`.
+3. Series values must come from the SQL fetch — no fabricated series.
 4. Output must be JSON-serializable for the frontend (`echarts-for-react`).

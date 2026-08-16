@@ -4,7 +4,7 @@ This directory holds the **agent army**: shared rules/skills/schema plus one fol
 
 ## Status
 
-Agents are **arranged and configured** (Markdown + `helix.config.example.yaml` models). They are **not executed** yet — no orchestrator, OpenRouter calls, or sandbox runs in this phase.
+Agents are **arranged and executed** (Markdown + `helix.config.example.yaml` models). Runtime prompts use assigned rules and skills only — not instruction files.
 
 ## Layout
 

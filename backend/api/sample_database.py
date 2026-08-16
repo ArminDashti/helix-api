@@ -235,7 +235,10 @@ def ensure_configured_sample_if_needed() -> Path | None:
 
     data = load_config()
     raw = data.get("database") if isinstance(data.get("database"), dict) else {}
-    if not is_user_provided_database(raw):
+    from .db_dialects.base import normalize_engine
+
+    engine = normalize_engine(raw.get("engine") if isinstance(raw, dict) else None)
+    if engine == "sqlite" and not is_user_provided_database(raw):
         data["database"] = {**DEFAULT_DATABASE}
         save_config(data)
 

@@ -3,6 +3,8 @@ set -eu
 
 cd /app/backend
 
+pip install --no-cache-dir -q -r /app/backend/requirements.txt
+
 # Seed helix.config.yaml from example when missing (volume may be empty on first run).
 if [ ! -f /app/helix.config.yaml ] && [ -f /app/helix.config.example.yaml ]; then
   cp /app/helix.config.example.yaml /app/helix.config.yaml

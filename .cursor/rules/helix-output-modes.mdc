@@ -1,0 +1,22 @@
+---
+description: Preserve analysis modes and the text_report / grid / echarts_option contract
+globs: backend/api/demo.py,backend/api/pipeline_run.py,backend/api/chart_payload.py
+alwaysApply: false
+---
+
+# Helix output modes
+
+Canonical modes: `auto`, `chart`, `grid`, `analytical_report`, `analytical_report_chart`.
+Aliases: `analysis` / `research` → `analytical_report`; `both` → `analytical_report_chart`.
+
+`_package_result` must keep:
+
+| Mode | text_report | grid | echarts_option |
+|------|-------------|------|----------------|
+| analytical_report | required | null | null |
+| grid | null | required | null |
+| chart | null | null | required |
+| analytical_report_chart | required | optional | required |
+| auto | required | optional | optional |
+
+Chart types stay in `VALID_CHART_TYPES`. Build charts from SQL fetch rows only (`build_echarts_option` / `build_grid`).

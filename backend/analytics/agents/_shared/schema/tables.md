@@ -1,7 +1,8 @@
 # Allowed objects
 
-List one fully qualified object per line (SQL allowlist — AdventureWorks LT sample):
+List one fully qualified object per line (SQL allowlist). Prefer live warehouse objects when connected to Pakhsh:
 
+- Warehouse.Anbar
 - SalesLT.Customer
 - SalesLT.Address
 - SalesLT.CustomerAddress
@@ -14,6 +15,26 @@ List one fully qualified object per line (SQL allowlist — AdventureWorks LT sa
 - SalesLT.SalesOrderDetail
 
 # Catalog
+
+## Warehouse.Anbar
+
+- **Kind:** table
+- **Description:** Warehouse master (Pakhsh). Use for warehouse counts by type. Keep queries bounded with TOP.
+
+| Column | Description |
+|--------|-------------|
+| ccAnbar | Warehouse primary key |
+| ccMarkazPakhsh | Distribution center id |
+| NameAnbar | Warehouse name |
+| CodeNoeAnbar | Warehouse type code |
+| ccAddress | Address id |
+| Telephone | Phone |
+| Fax | Fax |
+| CodeNoeSys | System type code |
+| CodeVazeiat | Status code |
+| Anbarak | Sub-warehouse flag |
+| NopWarehouseId | External warehouse id |
+| GLN | Global location number |
 
 ## SalesLT.Customer
 

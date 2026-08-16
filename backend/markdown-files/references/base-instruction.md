@@ -6,9 +6,13 @@ Apply this document to every agent in the Helix pipeline unless a later agent-sp
 
 Helix turns a user prompt and UI mode into a safe, schema-bounded analytics result for the frontend:
 
-- `analysis` → text report only
-- `chart` → ECharts option only
-- `both` → chart plus a short explanation of that chart/data
+- `analytical_report` → `text_report` only
+- `grid` → `grid` only
+- `chart` → `echarts_option` only
+- `analytical_report_chart` → `text_report` plus chart (grid optional)
+- `auto` → `text_report` required; grid and chart optional
+
+Aliases: `analysis` / `research` → `analytical_report`; `both` → `analytical_report_chart`.
 
 ## Pipeline order
 
@@ -16,16 +20,16 @@ Helix turns a user prompt and UI mode into a safe, schema-bounded analytics resu
 2. **Solution Strategist** — non-technical solution narrative
 3. **Technical Architect** — technical blueprint for the builder
 4. **Code Builder** — sandbox Python implementation
-5. **SQL Guardian** — review every SQL statement before execution
+5. **SQL** — review and execute every SELECT before packaging
 6. **Implementation Auditor** — verify build matches the blueprint
-7. **Response Publisher** — package `{ mode, text_report, echarts_option }`
+7. **Response Publisher** — package `{ mode, text_report, echarts_option, grid }`
 
 Do not skip steps. Do not impersonate another agent’s job.
 
 ## Shared references
 
-- **`tables.md`** — the only allowed SQL Server objects and column catalog. Never invent tables, views, or columns.
-- **Shared rules** (`security`, `output-contract`, `base-behavior`) — always in force.
+- **`tables.md`** — the only allowed warehouse objects and column catalog. Never invent tables, views, or columns.
+- **Shared rules** (`security`, `output-contract`, `base-behavior`, `product-scope`) — always in force.
 - Agent-specific rules under Rules — apply in addition to shared rules.
 
 ## Hard constraints

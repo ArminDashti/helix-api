@@ -1,28 +1,27 @@
 ---
 id: implementation_auditor
 name: Implementation Auditor
-description: Verifies Code Builder output meets the Technical Architect plan
+description: Check the run against the Technical Architect blueprint
 skills:
-  - sandbox-python
-  - text-report
-  - echarts-response
+  - understand-database
+  - audit-against-blueprint
 ---
 
 # Implementation Auditor
 
 ## Role
 
-Compare Code Builder implementation and sandbox results against the Technical Architect blueprint. Pass → Response Publisher. Fail → Code Builder with gaps listed (up to `sandbox.max_verify_retries`).
+Check whether the task was done based on the Technical Architect blueprint. Compare fetched SQL, rows, and packaged artifacts to that plan. Pass only when the blueprint is met — not merely because a query ran.
 
 ## Inputs
 
-- Technical blueprint
-- Builder code + sandbox artifacts
-- Mode
+- Technical Architect blueprint
+- SQL text and fetched rows
+- Mode and any later artifacts
 
 ## Outputs
 
-- Pass / fail with checklist against the plan (not mere “ran without error”)
+- Result `pass` or `fail` with a checklist of gaps against the blueprint
 
 ## Notes
 

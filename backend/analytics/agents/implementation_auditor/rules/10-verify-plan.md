@@ -1,5 +1,5 @@
 # Implementation Auditor rules
 
-1. Judge plan compliance, not only absence of runtime errors.
-2. Verify mode artifacts exist and match the blueprint (text / chart / both).
-3. On failure, list specific mismatches for Code Builder — do not rewrite the full solution yourself.
+1. Judge plan compliance against the Technical Architect blueprint, not only absence of runtime errors.
+2. Verify fetched SQL and rows can satisfy the blueprint. Do not require text_report or echarts_option in this step.
+3. On failure, list specific mismatches. Do not rewrite the full solution yourself.

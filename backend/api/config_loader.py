@@ -16,7 +16,7 @@ from typing import Any
 import yaml
 from django.conf import settings
 
-from .agents import AGENT_BY_ID, AGENT_PIPELINE, is_builtin_agent
+from .agents import AGENT_BY_ID, AGENT_IDS, AGENT_PIPELINE, is_builtin_agent
 
 AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 TOKEN_ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -39,36 +39,36 @@ DEFAULT_DATABASE = {
 }
 
 DEFAULT_AGENT_MODELS = {
-    "task_validator": "openai/gpt-4o-mini",
-    "solution_strategist": "anthropic/claude-sonnet-4",
-    "technical_architect": "openai/gpt-4o",
-    "code_builder": "anthropic/claude-sonnet-4",
-    "sql_guardian": "openai/gpt-4o-mini",
-    "implementation_auditor": "openai/gpt-4o-mini",
-    "response_publisher": "openai/gpt-4o-mini",
+    "task_validator": "auto",
+    "solution_strategist": "auto",
+    "technical_architect": "auto",
+    "code_builder": "auto",
+    "sql": "auto",
+    "implementation_auditor": "auto",
+    "response_publisher": "auto",
 }
 
 DEFAULT_CURSOR_AGENT_MODELS = {
-    "task_validator": "composer-2",
-    "solution_strategist": "composer-2",
-    "technical_architect": "composer-2",
-    "code_builder": "composer-2",
-    "sql_guardian": "composer-2",
-    "implementation_auditor": "composer-2",
-    "response_publisher": "composer-2",
+    "task_validator": "auto",
+    "solution_strategist": "auto",
+    "technical_architect": "auto",
+    "code_builder": "auto",
+    "sql": "auto",
+    "implementation_auditor": "auto",
+    "response_publisher": "auto",
 }
 
 DEFAULT_OPENROUTER = {
     "token_env": DEFAULT_OPENROUTER_TOKEN_ENV,
     "app_name": "Helix",
-    "default_model": "openai/gpt-4o-mini",
+    "default_model": "auto",
     "agents": {agent_id: {"model": model} for agent_id, model in DEFAULT_AGENT_MODELS.items()},
 }
 
 DEFAULT_CURSOR = {
     "token_env": DEFAULT_CURSOR_TOKEN_ENV,
     "app_name": "Helix",
-    "default_model": "composer-2",
+    "default_model": "auto",
     "agents": {
         agent_id: {"model": model} for agent_id, model in DEFAULT_CURSOR_AGENT_MODELS.items()
     },
@@ -100,11 +100,43 @@ def ensure_config_exists() -> Path:
     return path
 
 
+DEFAULT_SQL = {
+    "max_retries": 3,
+    "require_row_limit": True,
+    "forbid_select_star": True,
+    "max_rows": 10000,
+}
+
+
+def _rename_sql_guardian(obj: Any) -> Any:
+    """Rewrite legacy sql_guardian ids/keys to sql."""
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for key, value in obj.items():
+            new_key = "sql" if key == "sql_guardian" else key
+            out[new_key] = _rename_sql_guardian(value)
+        return out
+    if isinstance(obj, list):
+        return [
+            "sql" if item == "sql_guardian" else _rename_sql_guardian(item)
+            for item in obj
+        ]
+    if obj == "sql_guardian":
+        return "sql"
+    return obj
+
+
 def load_config() -> dict[str, Any]:
     path = ensure_config_exists()
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         data = {}
+    migrated = _rename_sql_guardian(data)
+    if not isinstance(migrated, dict):
+        migrated = {}
+    if migrated != data:
+        save_config(migrated)
+        return migrated
     return data
 
 
@@ -131,14 +163,33 @@ def is_user_provided_database(db: dict[str, Any] | None) -> bool:
     return bool(host and name)
 
 
+def _explicit_warehouse_engine(db: dict[str, Any]) -> str | None:
+    from .db_dialects.base import ENGINE_ALIASES
+
+    raw = str(db.get("engine") or "").strip().lower()
+    if not raw:
+        return None
+    engine = ENGINE_ALIASES.get(raw)
+    if engine in ("sqlserver", "postgresql"):
+        return engine
+    return None
+
+
 def _finalize_database(db: dict[str, Any] | None) -> dict[str, Any]:
-    """Normalize settings; missing warehouse config becomes sqlite + sample file."""
+    """Normalize settings. Sample SQLite is only used when the engine is sqlite."""
     from .db_dialects.base import normalize_engine
-    from .sample_database import SAMPLE_FILENAME, resolve_sqlite_path
+    from .sample_database import SAMPLE_FILENAME, is_sample_db_path, resolve_sqlite_path
 
     raw = db if isinstance(db, dict) else {}
+    warehouse_engine = _explicit_warehouse_engine(raw)
     merged = {**DEFAULT_DATABASE, **raw}
-    if not is_user_provided_database(merged):
+    if warehouse_engine:
+        merged["engine"] = warehouse_engine
+        leftover_name = str(merged.get("name") or merged.get("path") or "").strip()
+        if is_sample_db_path(leftover_name):
+            merged["name"] = ""
+            merged["path"] = ""
+    elif not is_user_provided_database(merged):
         merged = deepcopy(DEFAULT_DATABASE)
     merged["engine"] = normalize_engine(merged.get("engine"))
     if merged["engine"] == "sqlite":
@@ -168,6 +219,8 @@ def _finalize_database(db: dict[str, Any] | None) -> dict[str, Any]:
         resolved = resolve_sqlite_path(raw_name or SAMPLE_FILENAME)
         merged["name"] = str(resolved)
         merged["path"] = str(resolved)
+    else:
+        merged["path"] = ""
     return merged
 
 
@@ -188,10 +241,20 @@ def get_database_settings() -> dict[str, Any]:
 
 def update_database_settings(payload: dict[str, Any]) -> dict[str, Any]:
     data = load_config()
-    if "connection_string" in payload and payload.get("connection_string") is not None:
-        current = connection_string_to_database(str(payload["connection_string"]))
+    conn = payload.get("connection_string")
+    engine_hint = _explicit_warehouse_engine(payload)
+    use_connection_string = conn is not None and str(conn).strip() != ""
+    if use_connection_string and engine_hint in ("sqlserver", "postgresql"):
+        if str(conn).strip().lower().startswith("file:"):
+            use_connection_string = False
+    if use_connection_string:
+        current = connection_string_to_database(str(conn))
+        if engine_hint:
+            current["engine"] = engine_hint
     else:
         current = get_database_settings()
+        if engine_hint:
+            current["engine"] = engine_hint
     allowed = set(DEFAULT_DATABASE.keys())
     for key, value in payload.items():
         if key not in allowed:
@@ -212,7 +275,7 @@ def update_database_settings(payload: dict[str, Any]) -> dict[str, Any]:
     current = _finalize_database(current)
     data["database"] = current
     save_config(data)
-    if not is_user_provided_database(current):
+    if current.get("engine") == "sqlite" and not is_user_provided_database(current):
         from .sample_database import ensure_sample_database
 
         try:
@@ -394,6 +457,14 @@ _MODELS_CACHE: dict[str, Any] = {"fetched_at": 0.0, "models": []}
 _MODELS_CACHE_TTL_SEC = 600
 
 
+def _catalog_with_auto(models: list[dict[str, str]]) -> list[dict[str, str]]:
+    out = list(models)
+    if not any(str(item.get("id", "")).lower() == "auto" for item in out):
+        out.append({"id": "auto", "name": "Auto"})
+    out.sort(key=lambda item: str(item.get("name") or item.get("id") or "").lower())
+    return out
+
+
 def fetch_openrouter_models(*, force: bool = False) -> list[dict[str, str]]:
     """
     Fetch OpenRouter model catalog (cached ~10 minutes).
@@ -442,7 +513,7 @@ def fetch_openrouter_models(*, force: bool = False) -> list[dict[str, str]]:
         name = item.get("name") or model_id
         models.append({"id": str(model_id), "name": str(name)})
 
-    models.sort(key=lambda m: m["id"].lower())
+    models = _catalog_with_auto(models)
     _MODELS_CACHE["fetched_at"] = now
     _MODELS_CACHE["models"] = models
     return list(models)
@@ -576,34 +647,75 @@ def get_custom_agents() -> list[dict[str, str]]:
         if not isinstance(entry, dict):
             continue
         agent_id = str(entry.get("id") or "").strip()
-        if not agent_id or agent_id in seen or agent_id in AGENT_BY_ID:
+        if not agent_id or agent_id in seen:
             continue
         if not AGENT_ID_RE.match(agent_id):
             continue
         seen.add(agent_id)
         name = str(entry.get("name") or "").strip() or agent_id
         description = str(entry.get("description") or "").strip()
+        human_name = str(entry.get("human_name") or "").strip()
         agents.append(
             {
                 "id": agent_id,
                 "name": name,
                 "description": description,
-                "builtin": False,
+                "human_name": human_name,
+                "builtin": agent_id in AGENT_BY_ID,
                 "disabled": bool(entry.get("disabled")),
             }
         )
     return agents
 
 
+def _apply_agent_profile(meta: dict[str, Any], profiles: dict[str, Any]) -> dict[str, Any]:
+    item = dict(meta)
+    profile = profiles.get(meta["id"])
+    if not isinstance(profile, dict):
+        return item
+    if profile.get("name"):
+        item["name"] = str(profile["name"]).strip()
+    if "human_name" in profile:
+        item["human_name"] = str(profile.get("human_name") or "").strip()
+    if "description" in profile:
+        item["description"] = str(profile.get("description") or "").strip()
+    return item
+
+
+def restore_seed_pipeline_agents() -> None:
+    """Bring back seed pipeline agents hidden by deleted_agents (one-time)."""
+    data = load_config()
+    if data.get("pipeline_agents_restored"):
+        return
+    deleted = get_deleted_agent_ids()
+    data["deleted_agents"] = sorted(deleted - set(AGENT_IDS))
+    data["pipeline_agents_restored"] = True
+    save_config(data)
+
+
 def get_all_agent_metas() -> list[dict[str, Any]]:
+    restore_seed_pipeline_agents()
     disabled = get_disabled_agent_ids()
     deleted = get_deleted_agent_ids()
+    data = load_config()
+    profiles = data.get("agent_profiles") if isinstance(data.get("agent_profiles"), dict) else {}
+    custom_by_id = {item["id"]: item for item in get_custom_agents()}
     result: list[dict[str, Any]] = []
     for meta in AGENT_PIPELINE:
         if meta["id"] in deleted:
             continue
-        result.append({**meta, "builtin": True, "disabled": meta["id"] in disabled})
-    result.extend(get_custom_agents())
+        base = {**meta, "builtin": True, "disabled": meta["id"] in disabled}
+        custom = custom_by_id.get(meta["id"])
+        if custom:
+            for key in ("name", "description", "human_name", "disabled"):
+                if custom.get(key) not in (None, ""):
+                    base[key] = custom[key]
+            base["disabled"] = bool(custom.get("disabled")) if "disabled" in custom else base["disabled"]
+        result.append(_apply_agent_profile(base, profiles))
+    for custom in custom_by_id.values():
+        if custom["id"] in AGENT_BY_ID or custom["id"] in deleted:
+            continue
+        result.append(_apply_agent_profile(custom, profiles))
     return result
 
 
@@ -662,18 +774,38 @@ def get_agent_meta(agent_id: str) -> dict[str, Any]:
     raise KeyError(f"Unknown agent: {agent_id}")
 
 
+def _clean_human_name(raw: Any) -> str:
+    cleaned = str(raw or "").strip()
+    if len(cleaned) > 80:
+        raise ValueError("human_name must be at most 80 characters")
+    return cleaned
+
+
 def create_custom_agent(
     agent_id: str,
     name: str,
     description: str = "",
     *,
-    instruction: str = "",
+    human_name: str = "",
 ) -> dict[str, Any]:
     cleaned_id = (agent_id or "").strip()
     if not AGENT_ID_RE.match(cleaned_id):
         raise ValueError(
             "id must be lowercase letters, digits, or underscores, starting with a letter"
         )
+    data = load_config()
+    deleted = get_deleted_agent_ids()
+    if cleaned_id in deleted:
+        deleted.discard(cleaned_id)
+        data["deleted_agents"] = sorted(deleted)
+        save_config(data)
+        if is_builtin_agent(cleaned_id):
+            return update_agent_fields(
+                cleaned_id,
+                name=name,
+                human_name=human_name,
+                description=description,
+            )
     if cleaned_id in known_agent_ids():
         raise ValueError(f"Agent already exists: {cleaned_id}")
     cleaned_name = (name or "").strip()
@@ -684,6 +816,7 @@ def create_custom_agent(
     cleaned_description = (description or "").strip()
     if len(cleaned_description) > 500:
         raise ValueError("description must be at most 500 characters")
+    cleaned_human = _clean_human_name(human_name)
 
     data = load_config()
     custom = data.get("custom_agents")
@@ -694,6 +827,7 @@ def create_custom_agent(
             "id": cleaned_id,
             "name": cleaned_name,
             "description": cleaned_description,
+            "human_name": cleaned_human,
         }
     )
     data["custom_agents"] = custom
@@ -703,12 +837,6 @@ def create_custom_agent(
     from . import markdown_store as store
 
     store.ensure_dirs()
-    instr_path = store.instructions_dir() / f"{cleaned_id}.md"
-    if not instr_path.exists():
-        instr_path.write_text(
-            instruction if isinstance(instruction, str) else "",
-            encoding="utf-8",
-        )
     skills_path = store.skills_dir() / cleaned_id
     skills_path.mkdir(parents=True, exist_ok=True)
 
@@ -716,8 +844,8 @@ def create_custom_agent(
         "id": cleaned_id,
         "name": cleaned_name,
         "description": cleaned_description,
+        "human_name": cleaned_human,
         "builtin": False,
-        "instruction": instr_path.read_text(encoding="utf-8") if instr_path.exists() else "",
     }
 
 
@@ -753,6 +881,12 @@ def delete_custom_agent(agent_id: str) -> None:
         names.pop(cleaned_id, None)
         data["agent_names"] = names
 
+    profiles = data.get("agent_profiles") if isinstance(data.get("agent_profiles"), dict) else {}
+    if cleaned_id in profiles:
+        profiles = dict(profiles)
+        profiles.pop(cleaned_id, None)
+        data["agent_profiles"] = profiles
+
     for section in ("openrouter", "cursor"):
         section_data = data.get(section)
         if isinstance(section_data, dict) and isinstance(section_data.get("agents"), dict):
@@ -786,9 +920,6 @@ def delete_custom_agent(agent_id: str) -> None:
 
     from . import markdown_store as store
 
-    instr_path = store.instructions_dir() / f"{cleaned_id}.md"
-    if instr_path.exists():
-        instr_path.unlink()
     store.save_assignments(store.load_assignments())
     store.save_skill_assignments(store.load_skill_assignments())
 
@@ -828,8 +959,104 @@ def update_agent_display_name(agent_id: str, name: str) -> dict[str, str]:
     return get_agent_display_names()
 
 
+def update_agent_fields(
+    agent_id: str,
+    *,
+    name: str | None = None,
+    human_name: str | None = None,
+    description: str | None = None,
+) -> dict[str, Any]:
+    if agent_id not in known_agent_ids():
+        raise KeyError(f"Unknown agent: {agent_id}")
+    data = load_config()
+    profiles = data.get("agent_profiles") if isinstance(data.get("agent_profiles"), dict) else {}
+    profile = dict(profiles.get(agent_id) or {}) if isinstance(profiles.get(agent_id), dict) else {}
+
+    if name is not None:
+        update_agent_display_name(agent_id, name)
+        data = load_config()
+        profiles = data.get("agent_profiles") if isinstance(data.get("agent_profiles"), dict) else {}
+        profile = dict(profiles.get(agent_id) or {}) if isinstance(profiles.get(agent_id), dict) else {}
+
+    if human_name is not None:
+        profile["human_name"] = _clean_human_name(human_name)
+    if description is not None:
+        cleaned_description = str(description).strip()
+        if len(cleaned_description) > 500:
+            raise ValueError("description must be at most 500 characters")
+        profile["description"] = cleaned_description
+
+    if not is_builtin_agent(agent_id):
+        custom = data.get("custom_agents")
+        if isinstance(custom, list):
+            for entry in custom:
+                if isinstance(entry, dict) and str(entry.get("id") or "").strip() == agent_id:
+                    if "human_name" in profile:
+                        entry["human_name"] = profile["human_name"]
+                    if "description" in profile:
+                        entry["description"] = profile["description"]
+                    break
+        data["custom_agents"] = custom
+
+    if profile:
+        profiles[agent_id] = profile
+        data["agent_profiles"] = profiles
+    save_config(data)
+    return get_agent_meta(agent_id)
+
+
+def agent_company_label(agent_id: str) -> str:
+    try:
+        meta = get_agent_meta(agent_id)
+    except KeyError:
+        return agent_id.replace("_", " ").title()
+    names = get_agent_display_names()
+    role = names.get(agent_id, meta.get("name") or agent_id)
+    human = str(meta.get("human_name") or "").strip()
+    if human and role:
+        return f"{human} — {role}"
+    return human or str(role)
+
+
 _CURSOR_MODELS_CACHE: dict[str, Any] = {"fetched_at": 0.0, "models": []}
 _CURSOR_MODELS_CACHE_TTL_SEC = 600
+CURSOR_CLOUD_API_BASE = "https://api.cursor.com"
+
+
+def cursor_cloud_json(
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    timeout: int = 30,
+) -> Any:
+    """Call Cursor Cloud Agents API with Basic auth (API key as username)."""
+    token = get_cursor_token()
+    if not token:
+        raise ValueError("Cursor API key is not set")
+    basic = base64.b64encode(f"{token}:".encode("utf-8")).decode("ascii")
+    url = f"{CURSOR_CLOUD_API_BASE}{path}"
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    headers = {
+        "Authorization": f"Basic {basic}",
+        "Accept": "application/json",
+    }
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=body, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:400]
+        raise ValueError(f"Cursor API request failed ({exc.code}): {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError(f"Cursor API request failed: {exc.reason}") from exc
+    if not raw.strip():
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Cursor API returned non-JSON") from exc
 
 
 def fetch_cursor_models(*, force: bool = False) -> list[dict[str, str]]:
@@ -845,27 +1072,7 @@ def fetch_cursor_models(*, force: bool = False) -> list[dict[str, str]]:
     ):
         return list(_CURSOR_MODELS_CACHE["models"])
 
-    token = get_cursor_token()
-    if not token:
-        raise ValueError("Cursor API key is not set")
-
-    basic = base64.b64encode(f"{token}:".encode("utf-8")).decode("ascii")
-    req = urllib.request.Request(
-        "https://api.cursor.com/v1/models",
-        headers={
-            "Authorization": f"Basic {basic}",
-            "Accept": "application/json",
-        },
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:300]
-        raise ValueError(f"Cursor models request failed ({exc.code}): {body}") from exc
-    except urllib.error.URLError as exc:
-        raise ValueError(f"Cursor models request failed: {exc.reason}") from exc
+    payload = cursor_cloud_json("GET", "/v1/models")
 
     raw_list = None
     if isinstance(payload, dict):
@@ -883,7 +1090,7 @@ def fetch_cursor_models(*, force: bool = False) -> list[dict[str, str]]:
         name = item.get("displayName") or item.get("name") or model_id
         models.append({"id": str(model_id), "name": str(name)})
 
-    models.sort(key=lambda m: m["id"].lower())
+    models = _catalog_with_auto(models)
     _CURSOR_MODELS_CACHE["fetched_at"] = now
     _CURSOR_MODELS_CACHE["models"] = models
     return list(models)
@@ -985,8 +1192,39 @@ def update_cursor_settings(payload: dict[str, Any]) -> dict[str, Any]:
     return get_cursor_settings()
 
 
+def get_sql_settings() -> dict[str, Any]:
+    data = load_config()
+    raw = data.get("sql")
+    if not isinstance(raw, dict):
+        raw = data.get("sql_guardian") if isinstance(data.get("sql_guardian"), dict) else {}
+    merged = {**DEFAULT_SQL, **raw}
+    try:
+        merged["max_retries"] = max(1, int(merged.get("max_retries") or 3))
+    except (TypeError, ValueError):
+        merged["max_retries"] = 3
+    try:
+        merged["max_rows"] = max(1, int(merged.get("max_rows") or 10000))
+    except (TypeError, ValueError):
+        merged["max_rows"] = 10000
+    merged["require_row_limit"] = bool(merged.get("require_row_limit", True))
+    merged["forbid_select_star"] = bool(merged.get("forbid_select_star", True))
+    return merged
+
+
 def get_active_provider_settings() -> dict[str, Any]:
     provider = get_provider()
     if provider == "cursor":
         return {"provider": provider, "settings": get_cursor_settings()}
     return {"provider": provider, "settings": get_openrouter_settings()}
+
+
+def get_agent_model(agent_id: str) -> str:
+    settings = get_active_provider_settings()["settings"]
+    agents = settings.get("agents") if isinstance(settings.get("agents"), dict) else {}
+    entry = agents.get(agent_id)
+    if isinstance(entry, dict):
+        model = str(entry.get("model") or "").strip()
+        if model:
+            return model
+    default = str(settings.get("default_model") or "").strip()
+    return default or "auto"

@@ -12,7 +12,7 @@ skills:
 
 ## Role
 
-Compare Code Builder implementation and sandbox results against the Technical Architect blueprint. Pass → Response Publisher. Fail → Code Builder with gaps listed (up to `sandbox.max_verify_retries`). Follow `references/base-instruction.md`.
+Compare Code Builder implementation and sandbox results against the Technical Architect blueprint. Pass → Response Publisher. Fail → Code Builder with gaps listed (up to `sandbox.max_verify_retries`).
 
 ## Inputs
 
@@ -23,12 +23,6 @@ Compare Code Builder implementation and sandbox results against the Technical Ar
 ## Outputs
 
 - Pass / fail with checklist against the plan (not mere “ran without error”)
-
-## Constraints
-
-- Judge plan compliance, not only absence of runtime errors
-- Verify mode artifacts exist and match the blueprint
-- On failure, list specific mismatches — do not rewrite the full solution yourself
 
 ## Notes
 

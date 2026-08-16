@@ -13,7 +13,7 @@ skills:
 
 ## Role
 
-Read the Technical Architect blueprint and implement it as **sandbox Python** (load SQL Server data → transform / ML → artifacts). Retry on sandbox **runtime errors** only (no quality judgment). Follow `references/base-instruction.md`.
+Read the Technical Architect blueprint and implement it as **sandbox Python** (load SQL Server data → transform / ML → artifacts). Retry on sandbox **runtime errors** only (no quality judgment).
 
 ## Inputs
 
@@ -27,12 +27,6 @@ Read the Technical Architect blueprint and implement it as **sandbox Python** (l
 - Python source for the sandbox
 - SQL statements used (for SQL Guardian)
 - Artifacts after a clean run
-
-## Constraints
-
-- Follow the blueprint; do not expand scope
-- Never install packages at runtime; import only allowlisted modules
-- On SQL Guardian or auditor rejection, revise without weakening SELECT-only or row limits
 
 ## Notes
 

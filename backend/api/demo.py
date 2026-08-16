@@ -11,13 +11,16 @@ VALID_MODES = frozenset(
         "analytical_report",
         "grid",
         "analytical_report_chart",
+        "research",
         # legacy aliases
         "analysis",
         "both",
     }
 )
 VALID_LANGUAGES = frozenset({"en", "fa"})
-VALID_REPORT_TYPES = frozenset({"deep", "summary", "simple"})
+VALID_REPORT_TYPES = frozenset(
+    {"low", "medium", "high", "deep", "summary", "simple"}
+)
 VALID_CHART_TYPES = frozenset(
     {
         "bar",
@@ -37,11 +40,19 @@ _VALUES_B = [180, 220, 260, 150]
 
 
 def _normalize_mode(mode: str) -> str:
-    if mode == "analysis":
+    if mode in ("analysis", "research"):
         return "analytical_report"
     if mode == "both":
         return "analytical_report_chart"
     return mode
+
+
+def _normalize_report_type(report_type: str | None) -> str:
+    aliases = {"simple": "low", "summary": "medium", "deep": "high"}
+    value = aliases.get(report_type or "", report_type or "medium")
+    if value not in {"low", "medium", "high"}:
+        return "medium"
+    return value
 
 
 def _chart_option(chart_type: str, language: str) -> dict[str, Any]:
@@ -184,8 +195,9 @@ def _chart_option(chart_type: str, language: str) -> dict[str, Any]:
 
 
 def _text_report(language: str, report_type: str) -> str:
+    level = _normalize_report_type(report_type)
     if language == "fa":
-        if report_type == "deep":
+        if level == "high":
             return (
                 "تحلیل عمیق: شمال و شرق در این دوره بیشترین درآمد را دارند. "
                 "شرق با ۵۱۰ در صدر است و غرب با ۲۸۰ عقب‌تر است. "
@@ -193,21 +205,21 @@ def _text_report(language: str, report_type: str) -> str:
                 "روند فصلی نشان می‌دهد شرق پایدارتر از شمال رشد کرده است. "
                 "(نمونه دمو)"
             )
-        if report_type == "summary":
+        if level == "medium":
             return (
                 "خلاصه: شرق بیشترین درآمد (۵۱۰) و غرب کمترین (۲۸۰) را دارد. "
                 "اولویت: بهبود غرب و حفظ ظرفیت شرق. (نمونه دمو)"
             )
         return "شرق ۵۱۰، شمال ۴۲۰، جنوب ۳۱۰، غرب ۲۸۰. (نمونه دمو)"
 
-    if report_type == "deep":
+    if level == "high":
         return (
             "Deep analysis: North and East lead revenue this period. "
             "East is highest at 510; West trails at 280. "
             "Seasonal trend favors East over North for sustained growth. "
             "Focus follow-up on West conversion and East capacity. (Demo sample)"
         )
-    if report_type == "summary":
+    if level == "medium":
         return (
             "Summary: East leads at 510; West trails at 280. "
             "Prioritize West conversion and East capacity. (Demo sample)"
@@ -248,7 +260,7 @@ def get_demo_result(
 ) -> dict[str, Any]:
     mode = _normalize_mode(mode or "auto")
     language = language if language in VALID_LANGUAGES else "en"
-    report_type = report_type if report_type in VALID_REPORT_TYPES else "summary"
+    report_type = _normalize_report_type(report_type)
     chart_type = chart_type if chart_type in VALID_CHART_TYPES else "bar"
 
     text_report = None

@@ -1,14 +1,13 @@
 ---
 name: SQL safety
-description: Validate SQL as SELECT-only, allowlisted, and not an unbounded heavy
-  fetch
+description: Validate SQL as SELECT-only, allowlisted, and not an unbounded heavy fetch
 ---
 
 # SQL safety
 
 ## When to use
 
-- Every SQL statement before sandbox execution (SQL Guardian + deterministic sqlglot)
+- Every SQL statement the `sql` agent fetches, before execution
 
 ## Must reject
 
@@ -21,8 +20,8 @@ description: Validate SQL as SELECT-only, allowlisted, and not an unbounded heav
 
 - Single `SELECT` (or CTE + SELECT) against allowlisted objects
 - Aggregations with clear grouping
-- Row-bounded extracts respecting `sql_guardian.max_rows` / `sandbox.max_rows`
+- Row-bounded extracts respecting `sql.max_rows` / `sandbox.max_rows`
 
 ## Output
 
-Return approve/reject with concrete reasons so Code Builder can fix the query.
+Return approve/reject with concrete reasons. Invalid SQL must not run.

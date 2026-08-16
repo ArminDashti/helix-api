@@ -1,0 +1,22 @@
+---
+description: Helix API only reads a warehouse and emits report, grid, analysis, or chart artifacts
+alwaysApply: true
+---
+
+# Helix product scope
+
+This API is an LLM pipeline over a SELECT-only warehouse. It is not a business CRUD app.
+
+## Do
+
+- Introspect allowlisted catalog (`tables.md` / docs)
+- Execute SELECT (or CTE + SELECT) via `execute_select` / `validate_select`
+- Return `{ text_report, grid, echarts_option }` per `mode`
+
+## Do not
+
+- Add entity CRUD, write SQL APIs, EXEC / stored-procedure reports, or a dashboard product type
+- Invent modes outside `VALID_MODES` in `backend/api/demo.py`
+- Drop `grid` from `_package_result` in `backend/api/pipeline_run.py`
+
+Pipeline markdown lives in `backend/analytics/agents/` (source) and `backend/markdown-files/` (runtime; seed-if-empty — update both).

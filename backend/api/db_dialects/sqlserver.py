@@ -15,17 +15,9 @@ from .base import (
 
 
 def _require_pyodbc():
-    try:
-        import pyodbc  # type: ignore
-    except ImportError as exc:
-        detail = str(exc)
-        if "libodbc" in detail:
-            raise ValueError(
-                "unixODBC is missing (libodbc.so). Install unixodbc and "
-                "ODBC Driver 18 in the API image."
-            ) from exc
-        raise ValueError("pyodbc is not installed. Run: pip install pyodbc") from exc
-    return pyodbc
+    from ..ensure_packages import ensure_pyodbc_installed
+
+    return ensure_pyodbc_installed()
 
 
 def connect():
