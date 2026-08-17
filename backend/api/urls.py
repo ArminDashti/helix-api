@@ -14,6 +14,7 @@ urlpatterns = [
     path("rules/<str:rule_id>/rename/", views.rule_rename, name="rule-rename"),
     path("rules/<str:rule_id>/", views.rule_detail, name="rule-detail"),
     path("skills/", views.skills_collection, name="skills"),
+    path("skills/assignments/", views.skills_assignments, name="skills-assignments"),
     path("skills/<str:scope>/<str:skill_id>/rename/", views.skill_rename, name="skill-rename"),
     path("skills/<str:scope>/<str:skill_id>/", views.skill_detail, name="skill-detail"),
     path("docs/tables/", views.docs_tables, name="docs-tables"),

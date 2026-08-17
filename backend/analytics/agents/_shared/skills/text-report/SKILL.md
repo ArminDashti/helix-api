@@ -14,5 +14,6 @@ description: Produce a clear textual analysis for analytical_report modes (see g
 
 1. Follow `generate-analytical-report` for depth (`report_type`) and sourcing.
 2. Use plain language; include units, time grain, and caveats when relevant.
-3. For chart modes, explain what the chart shows — do not ignore the visual.
-4. Do not invent numbers that were not computed from the fetch.
+3. Write the report in the run `language`: Persian when `language` is `fa`, English when `en`. Do not translate SQL identifiers.
+4. For chart modes, explain what the chart shows — do not ignore the visual.
+5. Do not invent numbers that were not computed from the fetch.

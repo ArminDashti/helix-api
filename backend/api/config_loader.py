@@ -1,4 +1,4 @@
-"""Read/write helix.config.yaml (database + openrouter + cursor sections)."""
+"""Read/write helix.config.yaml (database + openrouter LLM + unused cursor sections)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +23,8 @@ AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 TOKEN_ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_OPENROUTER_TOKEN_ENV = "OPENROUTER_TOKEN"
 DEFAULT_CURSOR_TOKEN_ENV = "CURSOR_API_KEY"
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+VALID_PROVIDERS = ("openrouter", "openai_compatible")
 
 DEFAULT_DATABASE = {
     # Built-in AdventureWorks LT sample SQLite (seeded on first start).
@@ -60,6 +63,7 @@ DEFAULT_CURSOR_AGENT_MODELS = {
 
 DEFAULT_OPENROUTER = {
     "token_env": DEFAULT_OPENROUTER_TOKEN_ENV,
+    "base_url": DEFAULT_OPENROUTER_BASE_URL,
     "app_name": "Helix",
     "default_model": "auto",
     "agents": {agent_id: {"model": model} for agent_id, model in DEFAULT_AGENT_MODELS.items()},
@@ -436,12 +440,58 @@ def _section_stored_token(raw: Any) -> str:
 
 
 def get_openrouter_token() -> str:
-    """OpenRouter token from Settings (config), then optional env fallback."""
+    """LLM API key from Settings (config), then optional env fallback."""
     data = load_config()
     token = _section_stored_token(data.get("openrouter"))
     if token:
         return token
     return os.environ.get(get_openrouter_token_env(), "").strip()
+
+
+def _normalize_base_url(raw: Any) -> str:
+    return str(raw or "").strip().rstrip("/")
+
+
+def _rewrite_unresolvable_docker_hostname(base_url: str) -> str:
+    """Use loopback when host.docker.internal does not resolve (API not in Docker)."""
+    docker_hostname = "host.docker.internal"
+    if docker_hostname not in base_url:
+        return base_url
+    try:
+        socket.getaddrinfo(docker_hostname, None)
+    except OSError:
+        return base_url.replace(docker_hostname, "127.0.0.1")
+    return base_url
+
+
+def get_llm_base_url() -> str:
+    """Chat/models host: stored base_url, else OpenRouter default when that provider is selected."""
+    data = load_config()
+    raw = data.get("openrouter") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    stored = _rewrite_unresolvable_docker_hostname(_normalize_base_url(raw.get("base_url")))
+    if stored:
+        return stored
+    if get_provider() == "openrouter":
+        return DEFAULT_OPENROUTER_BASE_URL
+    return ""
+
+
+DEFAULT_LLM_TIMEOUT_SECONDS = 600
+
+
+def get_llm_timeout_seconds() -> int:
+    """HTTP read timeout for chat/completions (pipeline agents can run long)."""
+    data = load_config()
+    raw = data.get("openrouter") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    try:
+        value = int(raw.get("timeout_seconds") or DEFAULT_LLM_TIMEOUT_SECONDS)
+    except (TypeError, ValueError):
+        value = DEFAULT_LLM_TIMEOUT_SECONDS
+    return max(30, min(value, 900))
 
 
 def get_cursor_token() -> str:
@@ -453,7 +503,7 @@ def get_cursor_token() -> str:
     return os.environ.get(get_cursor_token_env(), "").strip()
 
 
-_MODELS_CACHE: dict[str, Any] = {"fetched_at": 0.0, "models": []}
+_MODELS_CACHE: dict[str, Any] = {"fetched_at": 0.0, "models": [], "base_url": ""}
 _MODELS_CACHE_TTL_SEC = 600
 
 
@@ -467,23 +517,27 @@ def _catalog_with_auto(models: list[dict[str, str]]) -> list[dict[str, str]]:
 
 def fetch_openrouter_models(*, force: bool = False) -> list[dict[str, str]]:
     """
-    Fetch OpenRouter model catalog (cached ~10 minutes).
-    Returns list of {id, name}. Raises ValueError if token missing or request fails.
+    Fetch the LLM model catalog from {base_url}/models (cached ~10 minutes).
+    Returns list of {id, name}. Raises ValueError if token/base URL missing or request fails.
     """
     now = time.time()
+    base_url = get_llm_base_url()
     if (
         not force
         and _MODELS_CACHE["models"]
+        and _MODELS_CACHE.get("base_url") == base_url
         and (now - float(_MODELS_CACHE["fetched_at"])) < _MODELS_CACHE_TTL_SEC
     ):
         return list(_MODELS_CACHE["models"])
 
     token = get_openrouter_token()
     if not token:
-        raise ValueError("OpenRouter API key is not set")
+        raise ValueError("API key is not set")
+    if not base_url:
+        raise ValueError("Base URL is not set")
 
     req = urllib.request.Request(
-        "https://openrouter.ai/api/v1/models",
+        f"{base_url}/models",
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
@@ -495,13 +549,20 @@ def fetch_openrouter_models(*, force: bool = False) -> list[dict[str, str]]:
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:300]
-        raise ValueError(f"OpenRouter models request failed ({exc.code}): {body}") from exc
+        raise ValueError(f"Models request failed ({exc.code}): {body}") from exc
     except urllib.error.URLError as exc:
-        raise ValueError(f"OpenRouter models request failed: {exc.reason}") from exc
+        raise ValueError(f"Models request failed: {exc.reason}") from exc
 
-    raw_list = payload.get("data") if isinstance(payload, dict) else None
+    raw_list = None
+    if isinstance(payload, dict):
+        if isinstance(payload.get("data"), list):
+            raw_list = payload.get("data")
+        elif isinstance(payload.get("models"), list):
+            raw_list = payload.get("models")
+    elif isinstance(payload, list):
+        raw_list = payload
     if not isinstance(raw_list, list):
-        raise ValueError("Unexpected OpenRouter models response")
+        raise ValueError("Unexpected models response")
 
     models: list[dict[str, str]] = []
     for item in raw_list:
@@ -516,6 +577,7 @@ def fetch_openrouter_models(*, force: bool = False) -> list[dict[str, str]]:
     models = _catalog_with_auto(models)
     _MODELS_CACHE["fetched_at"] = now
     _MODELS_CACHE["models"] = models
+    _MODELS_CACHE["base_url"] = base_url
     return list(models)
 
 
@@ -552,7 +614,15 @@ def get_openrouter_settings() -> dict[str, Any]:
             agents[agent_id] = {"model": default_model}
 
     token = get_openrouter_token()
+    stored_base_url = _normalize_base_url(raw.get("base_url"))
+    if stored_base_url:
+        base_url = stored_base_url
+    elif get_provider() == "openrouter":
+        base_url = DEFAULT_OPENROUTER_BASE_URL
+    else:
+        base_url = ""
     return {
+        "base_url": base_url,
         "app_name": (
             DEFAULT_OPENROUTER["app_name"]
             if raw.get("app_name") in (None, "")
@@ -579,6 +649,9 @@ def update_openrouter_settings(payload: dict[str, Any]) -> dict[str, Any]:
         stored_env = _normalize_token_env(
             payload["token_env"], DEFAULT_OPENROUTER_TOKEN_ENV
         )
+    stored_base_url = _normalize_base_url(raw.get("base_url"))
+    if "base_url" in payload:
+        stored_base_url = _normalize_base_url(payload.get("base_url"))
     if "app_name" in payload:
         value = payload["app_name"]
         current["app_name"] = (
@@ -607,6 +680,7 @@ def update_openrouter_settings(payload: dict[str, Any]) -> dict[str, Any]:
 
     section: dict[str, Any] = {
         "token_env": stored_env,
+        "base_url": stored_base_url,
         "app_name": current["app_name"],
         "default_model": current["default_model"],
         "agents": deepcopy(current["agents"]),
@@ -615,21 +689,28 @@ def update_openrouter_settings(payload: dict[str, Any]) -> dict[str, Any]:
         section["token"] = stored_token
     data["openrouter"] = section
     save_config(data)
+    _MODELS_CACHE["fetched_at"] = 0.0
+    _MODELS_CACHE["models"] = []
+    _MODELS_CACHE["base_url"] = ""
     return get_openrouter_settings()
 
 
 def get_provider() -> str:
     data = load_config()
     raw = data.get("provider")
-    if isinstance(raw, str) and raw.strip().lower() in ("openrouter", "cursor"):
-        return raw.strip().lower()
+    if isinstance(raw, str):
+        value = raw.strip().lower()
+        if value in VALID_PROVIDERS:
+            return value
+        if value == "cursor":
+            return DEFAULT_PROVIDER
     return DEFAULT_PROVIDER
 
 
 def update_provider(provider: str) -> str:
     value = (provider or "").strip().lower()
-    if value not in ("openrouter", "cursor"):
-        raise ValueError("provider must be openrouter or cursor")
+    if value not in VALID_PROVIDERS:
+        raise ValueError("provider must be openrouter or openai_compatible")
     data = load_config()
     data["provider"] = value
     save_config(data)
@@ -1212,10 +1293,7 @@ def get_sql_settings() -> dict[str, Any]:
 
 
 def get_active_provider_settings() -> dict[str, Any]:
-    provider = get_provider()
-    if provider == "cursor":
-        return {"provider": provider, "settings": get_cursor_settings()}
-    return {"provider": provider, "settings": get_openrouter_settings()}
+    return {"provider": get_provider(), "settings": get_openrouter_settings()}
 
 
 def get_agent_model(agent_id: str) -> str:

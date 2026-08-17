@@ -13,7 +13,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
 copy helix.config.example.yaml helix.config.yaml
 cd backend
-# Paste the OpenRouter or Cursor API key in the web UI Settings page.
+# Paste the OpenRouter or OpenAI-compatible API key in the web UI Settings page.
 ..\.venv\Scripts\python.exe manage.py migrate
 ..\.venv\Scripts\python.exe manage.py runserver 127.0.0.1:8000
 ```

@@ -742,6 +742,13 @@ def assemble_agent_prompt(agent_id: str) -> str:
         parts.append(f"### {skill.get('name') or skill.get('id')}")
         parts.append(skill.get("content") or "")
         parts.append("")
+    parts.append("## Warehouse catalog")
+    parts.append("")
+    try:
+        parts.append(get_reference("tables").get("content") or "")
+        parts.append("")
+    except FileNotFoundError:
+        pass
     return "\n".join(parts).strip() + "\n"
 
 def get_instruction(agent_id: str) -> str:

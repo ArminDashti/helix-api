@@ -1,25 +1,30 @@
-# Allowed objects
+# Pakhsh warehouse catalog
 
-List one fully qualified object per line (SQL allowlist). Prefer live warehouse objects when connected to Pakhsh:
+The live warehouse is Pakhsh (SQL Server). Use `schema.table` names from this catalog.
+AdventureWorks / `SalesLT.*` objects do not exist here.
+
+Other live Pakhsh schemas may also be queried (Sales, Warehouse, Global, Purchase, FinancialAccounting, AssetAccounting, Budget). Names are Finglish (Moshtary = customer, Foroshandeh = salesperson, Darkhast Faktor = invoice request, Satr = line).
+
+Primary objects:
 
 - Warehouse.Anbar
-- SalesLT.Customer
-- SalesLT.Address
-- SalesLT.CustomerAddress
-- SalesLT.Product
-- SalesLT.ProductCategory
-- SalesLT.ProductModel
-- SalesLT.ProductDescription
-- SalesLT.ProductModelProductDescription
-- SalesLT.SalesOrderHeader
-- SalesLT.SalesOrderDetail
+- Sales.Moshtary
+- Sales.Foroshandeh
+- Sales.DarkhastFaktor
+- Sales.DarkhastFaktorSatr
+- Sales.KalaGheymatForosh
+- Sales.ForoshandehMoshtary
+- Sales.Masir
+- Sales.ElamMarjoee
+- Sales.EtebarMoshtary
+- Sales.PrintFaktor
 
 # Catalog
 
 ## Warehouse.Anbar
 
 - **Kind:** table
-- **Description:** Warehouse master (Pakhsh). Use for warehouse counts by type. Keep queries bounded with TOP.
+- **Description:** Warehouse master. Use for warehouse counts by type.
 
 | Column | Description |
 |--------|-------------|
@@ -36,178 +41,125 @@ List one fully qualified object per line (SQL allowlist). Prefer live warehouse 
 | NopWarehouseId | External warehouse id |
 | GLN | Global location number |
 
-## SalesLT.Customer
+## Sales.Moshtary
 
 - **Kind:** table
-- **Description:** Customer master (AdventureWorks LT). Use for customer counts, salespeople, companies, and contact info.
+- **Description:** Customer master (Moshtary).
 
 | Column | Description |
 |--------|-------------|
-| CustomerID | Customer primary key |
-| NameStyle | Name style flag |
-| Title | Title (Mr./Ms.) |
-| FirstName | First name |
-| MiddleName | Middle name |
-| LastName | Last name |
-| Suffix | Name suffix |
-| CompanyName | Company / organization |
-| SalesPerson | Assigned salesperson |
-| EmailAddress | Email |
-| Phone | Phone |
-| PasswordHash | Password hash (do not expose) |
-| PasswordSalt | Password salt (do not expose) |
-| rowguid | Row GUID |
-| ModifiedDate | Last modified |
+| ccMoshtary | Customer primary key |
+| NameMoshtary | Customer name |
+| NameTablo | Storefront name |
+| Telephone | Phone |
+| CodeVazeiat | Status code |
+| EtebarKol | Total credit limit |
+| GLN | Global location number |
 
-## SalesLT.Address
+## Sales.Foroshandeh
 
 - **Kind:** table
-- **Description:** Postal addresses for customers (city, state/province, country/region).
+- **Description:** Salesperson (Foroshandeh) master per distribution center.
 
 | Column | Description |
 |--------|-------------|
-| AddressID | Address primary key |
-| AddressLine1 | Street line 1 |
-| AddressLine2 | Street line 2 |
-| City | City |
-| StateProvince | State or province |
-| CountryRegion | Country or region |
-| PostalCode | Postal code |
-| rowguid | Row GUID |
-| ModifiedDate | Last modified |
+| ccForoshandeh | Salesperson primary key |
+| ccMarkazPakhsh | Distribution center id |
+| ccAfrad | Person id |
+| CodeVazeiat | Status code |
 
-## SalesLT.CustomerAddress
+## Sales.DarkhastFaktor
 
 - **Kind:** table
-- **Description:** Links customers to addresses with an address type (Main Office, Shipping, etc.).
+- **Description:** Sales order / invoice request header. Join lines on `ccDarkhastFaktor` + `Sal`.
 
 | Column | Description |
 |--------|-------------|
-| CustomerID | Customer id |
-| AddressID | Address id |
-| AddressType | Address type label |
-| rowguid | Row GUID |
-| ModifiedDate | Last modified |
+| ccDarkhastFaktor | Order/invoice request id |
+| Sal | Year part of key |
+| ccMarkazPakhsh | Distribution center id |
+| ccForoshandeh | Salesperson id |
+| ccMoshtary | Customer id |
+| ShomarehFaktor | Invoice number |
+| TarikhFaktor | Invoice date |
+| MablaghKolFaktor | Gross invoice amount |
+| MablaghKhalesFaktor | Net invoice amount |
+| CodeVazeiat | Document status |
 
-## SalesLT.Product
+## Sales.DarkhastFaktorSatr
 
 - **Kind:** table
-- **Description:** Product catalog with costs, list prices, sizes, colors, and category/model links.
+- **Description:** Sales order / invoice line items (the Pakhsh equivalent of order detail). Parent is `Sales.DarkhastFaktor`.
 
 | Column | Description |
 |--------|-------------|
-| ProductID | Product primary key |
-| Name | Product name |
-| ProductNumber | SKU / product number |
-| Color | Color |
-| StandardCost | Standard cost |
-| ListPrice | List price |
-| Size | Size |
-| Weight | Weight |
-| ProductCategoryID | Category id |
-| ProductModelID | Model id |
-| SellStartDate | Sell start |
-| SellEndDate | Sell end |
-| DiscontinuedDate | Discontinued date |
-| ThumbNailPhoto | Thumbnail blob |
-| ThumbnailPhotoFileName | Thumbnail file name |
-| rowguid | Row GUID |
-| ModifiedDate | Last modified |
+| ccDarkhastFaktor | Parent order/invoice request id |
+| ccDarkhastFaktorSatr | Line primary key |
+| Sal | Year (with parent key) |
+| ccKala | Product id |
+| Tedad1 | Quantity in unit 1 |
+| MablaghForosh | Sale amount / unit price base |
+| MablaghForoshKhalesKala | Net sale amount for product |
+| Maliat | Tax amount |
 
-## SalesLT.ProductCategory
+## Sales.KalaGheymatForosh
 
 - **Kind:** table
-- **Description:** Product categories (supports parent/child hierarchy).
+- **Description:** Product selling price list.
 
 | Column | Description |
 |--------|-------------|
-| ProductCategoryID | Category primary key |
-| ParentProductCategoryID | Parent category id |
-| Name | Category name |
-| rowguid | Row GUID |
-| ModifiedDate | Last modified |
+| ccKala | Product id |
+| MablaghForosh | Sell price |
 
-## SalesLT.ProductModel
+## Sales.ForoshandehMoshtary
 
 - **Kind:** table
-- **Description:** Product models / catalog groupings.
+- **Description:** Salesperson–customer–route assignment.
 
 | Column | Description |
 |--------|-------------|
-| ProductModelID | Model primary key |
-| Name | Model name |
-| CatalogDescription | Catalog XML/text description |
-| rowguid | Row GUID |
-| ModifiedDate | Last modified |
+| ccForoshandeh | Salesperson id |
+| ccMoshtary | Customer id |
 
-## SalesLT.ProductDescription
+## Sales.Masir
 
 - **Kind:** table
-- **Description:** Localized product description text.
+- **Description:** Visit route definition.
 
 | Column | Description |
 |--------|-------------|
-| ProductDescriptionID | Description primary key |
-| Description | Description text |
-| rowguid | Row GUID |
-| ModifiedDate | Last modified |
+| ccMasir | Route primary key |
+| ccMarkazPakhsh | Distribution center id |
 
-## SalesLT.ProductModelProductDescription
+## Sales.ElamMarjoee
 
 - **Kind:** table
-- **Description:** Maps product models to descriptions by culture.
+- **Description:** Customer return declaration header.
 
 | Column | Description |
 |--------|-------------|
-| ProductModelID | Model id |
-| ProductDescriptionID | Description id |
-| Culture | Culture code (e.g. en) |
-| rowguid | Row GUID |
-| ModifiedDate | Last modified |
+| ccElamMarjoee | Return header id |
+| ccMarkazPakhsh | Distribution center id |
+| ccMoshtary | Customer id |
 
-## SalesLT.SalesOrderHeader
+## Sales.EtebarMoshtary
 
 - **Kind:** table
-- **Description:** Sales order headers — dates, customer, totals, tax, freight, status.
+- **Description:** Customer credit snapshot and block.
 
 | Column | Description |
 |--------|-------------|
-| SalesOrderID | Order primary key |
-| RevisionNumber | Revision |
-| OrderDate | Order date |
-| DueDate | Due date |
-| ShipDate | Ship date |
-| Status | Order status |
-| OnlineOrderFlag | Online order flag |
-| SalesOrderNumber | Order number |
-| PurchaseOrderNumber | PO number |
-| AccountNumber | Account number |
-| CustomerID | Customer id |
-| ShipToAddressID | Ship-to address id |
-| BillToAddressID | Bill-to address id |
-| ShipMethod | Shipping method |
-| CreditCardApprovalCode | Approval code |
-| SubTotal | Subtotal |
-| TaxAmt | Tax amount |
-| Freight | Freight |
-| TotalDue | Total due |
-| Comment | Comment |
-| rowguid | Row GUID |
-| ModifiedDate | Last modified |
+| ccMoshtary | Customer id |
+| ccMarkazPakhsh | Distribution center id |
 
-## SalesLT.SalesOrderDetail
+## Sales.PrintFaktor
 
 - **Kind:** table
-- **Description:** Sales order line items — product, qty, unit price, discount, line total.
+- **Description:** Invoice print log / parameters.
 
 | Column | Description |
 |--------|-------------|
-| SalesOrderID | Order id |
-| SalesOrderDetailID | Line primary key |
-| OrderQty | Quantity ordered |
-| ProductID | Product id |
-| UnitPrice | Unit price |
-| UnitPriceDiscount | Unit discount |
-| LineTotal | Line total |
-| rowguid | Row GUID |
-| ModifiedDate | Last modified |
+| ccMarkazPakhsh | Distribution center id |
+| ShomarehFaktorAz | Invoice number from |
+| ShomarehFaktorTa | Invoice number to |

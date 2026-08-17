@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time as _agent_time
 from typing import Any, Iterator
 
 from . import markdown_store as store
@@ -20,8 +21,38 @@ from .pipeline_graph import (
 from .sql_execute import execute_select, extract_sql
 
 
+def _ui_text(language: str, en: str, fa: str) -> str:
+    return fa if language == "fa" else en
+
+
 def _sse(data: dict[str, Any]) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _agent_debug_log(location: str, message: str, data: dict[str, Any], hypothesis_id: str) -> None:
+    # #region agent log
+    try:
+        with open(
+            r"C:\Users\armin\GitHub\helix-api\debug-9f5f92.log",
+            "a",
+            encoding="utf-8",
+        ) as _agent_log:
+            _agent_log.write(
+                json.dumps(
+                    {
+                        "sessionId": "9f5f92",
+                        "timestamp": int(_agent_time.time() * 1000),
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "hypothesisId": hypothesis_id,
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
 
 
 def _context_blob(ctx: dict[str, Any]) -> str:
@@ -54,9 +85,23 @@ def _run_agent(agent_id: str, ctx: dict[str, Any]) -> tuple[str, str]:
         "Reply with a JSON object that includes result (string) and message (string). "
         f"Run context:\n{_context_blob(ctx)}"
     )
+    language = ctx.get("language") or "en"
+    if language == "fa":
+        user += (
+            "\nWrite text_report and the user-visible message in Persian (فارسی). "
+            "Keep SQL, schema.table names, and catalog identifiers unchanged."
+        )
+    else:
+        user += (
+            "\nWrite text_report and the user-visible message in English. "
+            "Keep SQL, schema.table names, and catalog identifiers unchanged."
+        )
     if agent_id == "sql":
         user += (
-            "\nAlso include a sql field with one SELECT for the warehouse. "
+            "\nAlso include a sql field with one SELECT for the Pakhsh warehouse. "
+            "Use schema.table names from the warehouse catalog "
+            "(for order lines use Sales.DarkhastFaktorSatr, not SalesLT.SalesOrderDetail). "
+            "Do not use AdventureWorks or SalesLT objects; they are not in this warehouse. "
             "Do not invent numbers; the server will execute the SQL."
         )
     elif agent_id == "implementation_auditor":
@@ -82,14 +127,69 @@ def _run_agent(agent_id: str, ctx: dict[str, Any]) -> tuple[str, str]:
 
     if agent_id == "sql":
         sql_text = str(parsed.get("sql") or extract_sql(raw) or "")
+        # #region agent log
+        _sql_started = _agent_time.time()
+        _agent_debug_log(
+            "pipeline_run.py:_run_agent",
+            "SQL execute start",
+            {"agent_id": agent_id, "sql_len": len(sql_text)},
+            "D",
+        )
+        try:
+            with open(
+                r"C:\Users\armin\GitHub\helix-webui\debug-604d40.log",
+                "a",
+                encoding="utf-8",
+            ) as _dbg604:
+                _dbg604.write(
+                    json.dumps(
+                        {
+                            "sessionId": "604d40",
+                            "timestamp": int(_agent_time.time() * 1000),
+                            "location": "pipeline_run.py:_run_agent",
+                            "message": "SQL agent output before execute",
+                            "data": {
+                                "sql_preview": sql_text[:800],
+                                "system_has_saleslt_salesorderdetail": "SalesLT.SalesOrderDetail"
+                                in system,
+                                "system_has_darkhastfaktorsatr": "Sales.DarkhastFaktorSatr"
+                                in system,
+                                "sql_has_saleslt": "SalesLT" in sql_text,
+                                "sql_has_pakhsh_sales": "Sales." in sql_text,
+                            },
+                            "hypothesisId": "A",
+                            "runId": "post-fix",
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # #endregion
         fetch = execute_select(sql_text)
+        # #region agent log
+        _agent_debug_log(
+            "pipeline_run.py:_run_agent",
+            "SQL execute done",
+            {
+                "agent_id": agent_id,
+                "row_count": len(fetch.get("rows") or []),
+                "elapsed_s": round(_agent_time.time() - _sql_started, 2),
+            },
+            "D",
+        )
+        # #endregion
         ctx["sql_fetch"] = fetch
         ctx.setdefault("artifacts", {})[agent_id] = {
             "sql": fetch["sql"],
             "row_count": len(fetch["rows"]),
             "message": message,
         }
-        return "done", message or f"Fetched {len(fetch['rows'])} rows"
+        return "done", message or _ui_text(
+            language,
+            f"Fetched {len(fetch['rows'])} rows",
+            f"{len(fetch['rows'])} ردیف دریافت شد",
+        )
 
     artifacts = ctx.setdefault("artifacts", {})
     artifacts[agent_id] = {
@@ -100,11 +200,19 @@ def _run_agent(agent_id: str, ctx: dict[str, Any]) -> tuple[str, str]:
         ctx["text_report"] = str(parsed.get("text_report"))
     if agent_id == "implementation_auditor":
         if result in ("pass", "done", "success"):
-            return "pass", message or "Blueprint matched"
-        return "fail", message or "Blueprint not matched"
+            return "pass", message or _ui_text(
+                language, "Blueprint matched", "طرح تطبیق کرد"
+            )
+        return "fail", message or _ui_text(
+            language, "Blueprint not matched", "طرح تطبیق نکرد"
+        )
     if result in ("failed", "fail", "error", "failure"):
         return "failed", message
-    return "done", message or f"{agent_display_name(agent_id)} complete"
+    return "done", message or _ui_text(
+        language,
+        f"{agent_display_name(agent_id)} complete",
+        f"{agent_display_name(agent_id)} کامل شد",
+    )
 
 
 def _package_result(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -193,7 +301,11 @@ def pipeline_events(
             "event": "step",
             "agent_id": "user",
             "status": "done",
-            "message": f"Received prompt ({mode}/{language}) via {provider}: {prompt[:120]}",
+            "message": _ui_text(
+                language,
+                f"Received prompt ({mode}/{language}) via {provider}: {prompt[:120]}",
+                f"درخواست دریافت شد ({mode}/{language}) از {provider}: {prompt[:120]}",
+            ),
         }
     )
 
@@ -204,6 +316,13 @@ def pipeline_events(
     edge_uses: dict[str, int] = {}
     current: str | None = str(entry)
     steps = 0
+    pipeline_started = _agent_time.time()
+    _agent_debug_log(
+        "pipeline_run.py:pipeline_events",
+        "Pipeline start",
+        {"mode": mode, "entry": entry},
+        "B",
+    )
 
     def pick_next(source: str, status: str) -> tuple[str | None, str | None]:
         edge = next_edge(graph, source, status, edge_uses)
@@ -214,23 +333,52 @@ def pipeline_events(
         blocked = circuit_open_edge(graph, source, status, edge_uses)
         if blocked:
             cap = edge_limit(blocked)
-            return None, f"Circuit open: edge {blocked.get('id')} limit {cap}"
+            return None, _ui_text(
+                language,
+                f"Circuit open: edge {blocked.get('id')} limit {cap}",
+                f"مدار باز: یال {blocked.get('id')} حد {cap}",
+            )
         return None, None
 
     while current and steps < MAX_STEPS:
         steps += 1
         display = agent_display_name(current)
+        _agent_debug_log(
+            "pipeline_run.py:pipeline_events",
+            "Agent step start",
+            {
+                "step": steps,
+                "agent_id": current,
+                "elapsed_s": round(_agent_time.time() - pipeline_started, 2),
+            },
+            "E",
+        )
         yield _sse(
             {
                 "event": "step",
                 "agent_id": current,
                 "status": "running",
-                "message": f"Running {display}…",
+                "message": _ui_text(
+                    language,
+                    f"Running {display}…",
+                    f"در حال اجرای {display}…",
+                ),
             }
         )
         try:
             status, message = _run_agent(current, ctx)
         except Exception as exc:
+            _agent_debug_log(
+                "pipeline_run.py:pipeline_events",
+                "Agent step failed",
+                {
+                    "step": steps,
+                    "agent_id": current,
+                    "error": str(exc),
+                    "elapsed_s": round(_agent_time.time() - pipeline_started, 2),
+                },
+                "B",
+            )
             yield _sse(
                 {
                     "event": "step",

@@ -1,19 +1,22 @@
 # Copy to helix.config.yaml and fill in secrets.
 # Do not commit helix.config.yaml.
 #
-# Paste OpenRouter / Cursor API keys in the Settings UI. They are stored here as
-# openrouter.token / cursor.token (never returned by the API).
-# provider: openrouter uses OpenAI-compatible chat completions.
-# provider: cursor uses Cursor Cloud Agents API (POST /v1/agents, poll run).
+# Paste the OpenRouter or OpenAI-compatible API key in the web UI Settings page.
+# Keys are stored as openrouter.token (never returned by the API).
+# provider: openrouter | openai_compatible — both use OpenAI-compatible chat completions.
+# openrouter.base_url defaults to https://openrouter.ai/api/v1 for OpenRouter.
 provider: openrouter
 
-# Models are suggestions only — use any OpenRouter model ids you prefer.
+# Models are suggestions only — use any model ids your host accepts.
 # Runtime resolves: openrouter.agents.<id>.model, else openrouter.default_model.
 
 openrouter:
   token_env: OPENROUTER_TOKEN
+  base_url: "https://openrouter.ai/api/v1"
   app_name: "Helix"
   default_model: "auto"
+  # Per chat/completions call; pipeline agents can exceed 90s with large prompts.
+  timeout_seconds: 600
   agents:
     task_validator:
       model: "auto"
@@ -31,6 +34,7 @@ openrouter:
       model: "auto"
 
 
+# Unused leftover section (Settings no longer edits this). Chat uses openrouter.* only.
 cursor:
   token_env: CURSOR_API_KEY
   app_name: "Helix"

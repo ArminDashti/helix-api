@@ -3,52 +3,61 @@
 from __future__ import annotations
 
 import json
-import time
 import urllib.error
 import urllib.request
 from typing import Any
 
+import socket
+
 from .config_loader import (
-    cursor_cloud_json,
     get_agent_model,
-    get_cursor_token,
+    get_llm_base_url,
+    get_llm_timeout_seconds,
+    get_openrouter_settings,
     get_openrouter_token,
     get_provider,
 )
 
-_CURSOR_RUN_POLL_SEC = 2.0
-_CURSOR_RUN_TIMEOUT_SEC = 300.0
+_OPENROUTER_AUTO_MODEL = "openai/gpt-4o-mini"
+_OPENAI_COMPAT_AUTO_MODEL = "gpt-4o-mini"
 
 
-def require_llm() -> tuple[str, str]:
-    """Return (provider, token) or raise if the selected LLM cannot be used."""
+def require_llm() -> tuple[str, str, str]:
+    """Return (provider, token, base_url) or raise if the selected LLM cannot be used."""
     provider = get_provider()
-    if provider == "cursor":
-        token = get_cursor_token()
-        if not token:
-            raise ValueError("Cursor API key is not set")
-        return "cursor", token
     token = get_openrouter_token()
     if not token:
-        raise ValueError("OpenRouter API key is not set")
-    return "openrouter", token
+        raise ValueError("API key is not set")
+    base_url = get_llm_base_url()
+    if not base_url:
+        raise ValueError("Base URL is not set")
+    return provider, token, base_url
 
 
 def complete_chat(agent_id: str, user_message: str, system_prompt: str) -> str:
-    provider, token = require_llm()
-    if provider == "cursor":
-        return _complete_via_cursor_cloud(agent_id, user_message, system_prompt)
-    return _complete_via_openrouter(agent_id, user_message, system_prompt, token)
+    provider, token, base_url = require_llm()
+    return _complete_via_chat_completions(
+        agent_id, user_message, system_prompt, token, base_url, provider
+    )
 
 
-def _complete_via_openrouter(
-    agent_id: str, user_message: str, system_prompt: str, token: str
+def _complete_via_chat_completions(
+    agent_id: str,
+    user_message: str,
+    system_prompt: str,
+    token: str,
+    base_url: str,
+    provider: str,
 ) -> str:
-    url = "https://openrouter.ai/api/v1/chat/completions"
+    url = f"{base_url}/chat/completions"
 
     model = get_agent_model(agent_id)
     if not model or model == "auto":
-        model = "openai/gpt-4o-mini"
+        model = (
+            _OPENROUTER_AUTO_MODEL
+            if provider == "openrouter"
+            else _OPENAI_COMPAT_AUTO_MODEL
+        )
 
     body = json.dumps(
         {
@@ -60,24 +69,178 @@ def _complete_via_openrouter(
             "temperature": 0.2,
         }
     ).encode("utf-8")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if provider == "openrouter":
+        app_name = str(get_openrouter_settings().get("app_name") or "Helix")
+        headers["HTTP-Referer"] = "https://helix.local"
+        headers["X-Title"] = app_name
     req = urllib.request.Request(
         url,
         data=body,
         method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
+        headers=headers,
     )
+    timeout_s = get_llm_timeout_seconds()
+    # #region agent log
+    import time as _agent_time
+
+    _llm_started = _agent_time.time()
     try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
+        with open(
+            r"C:\Users\armin\GitHub\helix-api\debug-9f5f92.log",
+            "a",
+            encoding="utf-8",
+        ) as _agent_log:
+            _agent_log.write(
+                json.dumps(
+                    {
+                        "sessionId": "9f5f92",
+                        "timestamp": int(_agent_time.time() * 1000),
+                        "location": "llm_client.py:_complete_via_chat_completions",
+                        "message": "LLM call start",
+                        "data": {
+                            "agent_id": agent_id,
+                            "model": model,
+                            "provider": provider,
+                            "timeout_s": timeout_s,
+                            "runId": "post-fix",
+                        },
+                        "hypothesisId": "A",
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:400]
+        # #region agent log
+        try:
+            with open(
+                r"C:\Users\armin\GitHub\helix-api\debug-9f5f92.log",
+                "a",
+                encoding="utf-8",
+            ) as _agent_log:
+                _agent_log.write(
+                    json.dumps(
+                        {
+                            "sessionId": "9f5f92",
+                            "timestamp": int(_agent_time.time() * 1000),
+                            "location": "llm_client.py:_complete_via_chat_completions",
+                            "message": "LLM HTTP error",
+                            "data": {
+                                "agent_id": agent_id,
+                                "code": exc.code,
+                                "elapsed_s": round(_agent_time.time() - _llm_started, 2),
+                                "detail": detail[:120],
+                            },
+                            "hypothesisId": "A",
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # #endregion
         raise ValueError(f"LLM request failed ({exc.code}): {detail}") from exc
     except urllib.error.URLError as exc:
+        # #region agent log
+        try:
+            with open(
+                r"C:\Users\armin\GitHub\helix-api\debug-9f5f92.log",
+                "a",
+                encoding="utf-8",
+            ) as _agent_log:
+                _agent_log.write(
+                    json.dumps(
+                        {
+                            "sessionId": "9f5f92",
+                            "timestamp": int(_agent_time.time() * 1000),
+                            "location": "llm_client.py:_complete_via_chat_completions",
+                            "message": "LLM URL error",
+                            "data": {
+                                "agent_id": agent_id,
+                                "reason": str(exc.reason),
+                                "elapsed_s": round(_agent_time.time() - _llm_started, 2),
+                            },
+                            "hypothesisId": "A",
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # #endregion
         raise ValueError(f"LLM request failed: {exc.reason}") from exc
+    except TimeoutError as exc:
+        # #region agent log
+        try:
+            with open(
+                r"C:\Users\armin\GitHub\helix-api\debug-9f5f92.log",
+                "a",
+                encoding="utf-8",
+            ) as _agent_log:
+                _agent_log.write(
+                    json.dumps(
+                        {
+                            "sessionId": "9f5f92",
+                            "timestamp": int(_agent_time.time() * 1000),
+                            "location": "llm_client.py:_complete_via_chat_completions",
+                            "message": "LLM timeout",
+                            "data": {
+                                "agent_id": agent_id,
+                                "timeout_s": timeout_s,
+                                "elapsed_s": round(_agent_time.time() - _llm_started, 2),
+                            },
+                            "hypothesisId": "A",
+                        }
+                    )
+                    + "\n"
+                )
+        except Exception:
+            pass
+        # #endregion
+        raise ValueError(
+            f"LLM request timed out after {timeout_s}s — increase openrouter.timeout_seconds in helix.config.yaml"
+        ) from exc
+    except socket.timeout as exc:
+        raise ValueError(
+            f"LLM request timed out after {timeout_s}s — increase openrouter.timeout_seconds in helix.config.yaml"
+        ) from exc
+    # #region agent log
+    try:
+        with open(
+            r"C:\Users\armin\GitHub\helix-api\debug-9f5f92.log",
+            "a",
+            encoding="utf-8",
+        ) as _agent_log:
+            _agent_log.write(
+                json.dumps(
+                    {
+                        "sessionId": "9f5f92",
+                        "timestamp": int(_agent_time.time() * 1000),
+                        "location": "llm_client.py:_complete_via_chat_completions",
+                        "message": "LLM call ok",
+                        "data": {
+                            "agent_id": agent_id,
+                            "elapsed_s": round(_agent_time.time() - _llm_started, 2),
+                        },
+                        "hypothesisId": "A",
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
 
     choices = payload.get("choices") if isinstance(payload, dict) else None
     if not isinstance(choices, list) or not choices:
@@ -88,88 +251,6 @@ def _complete_via_openrouter(
     if not str(text).strip():
         raise ValueError("LLM returned an empty message")
     return str(text)
-
-
-def _cursor_model_payload(agent_id: str) -> dict[str, Any] | None:
-    model = get_agent_model(agent_id)
-    if not model or model == "auto" or model.startswith("openai/"):
-        return None
-    return {"id": model}
-
-
-def _cursor_run_result_text(payload: dict[str, Any]) -> str:
-    raw = payload.get("result")
-    if isinstance(raw, str):
-        return raw.strip()
-    if isinstance(raw, dict):
-        return json.dumps(raw)
-    return ""
-
-
-def _complete_via_cursor_cloud(
-    agent_id: str, user_message: str, system_prompt: str
-) -> str:
-    """Run a no-repo Cloud Agent and return its final assistant text."""
-    prompt_text = (
-        "You are a text-only assistant. Reply with the answer only. "
-        "Do not edit files or use tools unless required to produce the answer.\n\n"
-        f"System:\n{system_prompt}\n\nUser:\n{user_message}"
-    )
-    create_body: dict[str, Any] = {
-        "prompt": {"text": prompt_text},
-        "name": f"Helix {agent_id}"[:100],
-    }
-    model = _cursor_model_payload(agent_id)
-    if model:
-        create_body["model"] = model
-
-    created = cursor_cloud_json("POST", "/v1/agents", create_body, timeout=180)
-    if not isinstance(created, dict):
-        raise ValueError("Cursor API returned an unexpected create payload")
-    agent = created.get("agent") if isinstance(created.get("agent"), dict) else {}
-    run = created.get("run") if isinstance(created.get("run"), dict) else {}
-    agent_cloud_id = str(agent.get("id") or "").strip()
-    run_id = str(run.get("id") or agent.get("latestRunId") or "").strip()
-    if not agent_cloud_id or not run_id:
-        raise ValueError("Cursor API did not return agent and run ids")
-
-    try:
-        deadline = time.monotonic() + _CURSOR_RUN_TIMEOUT_SEC
-        status = str(run.get("status") or "")
-        result_text = _cursor_run_result_text(run)
-        first_poll = True
-        while time.monotonic() < deadline:
-            if status in {"ERROR", "CANCELLED", "EXPIRED"}:
-                break
-            if status == "FINISHED" and result_text:
-                break
-            if not first_poll:
-                time.sleep(_CURSOR_RUN_POLL_SEC)
-            first_poll = False
-            polled = cursor_cloud_json(
-                "GET",
-                f"/v1/agents/{agent_cloud_id}/runs/{run_id}",
-                timeout=30,
-            )
-            if not isinstance(polled, dict):
-                raise ValueError("Cursor API returned an unexpected run payload")
-            status = str(polled.get("status") or "")
-            polled_text = _cursor_run_result_text(polled)
-            if polled_text:
-                result_text = polled_text
-        else:
-            raise ValueError("Cursor agent run timed out")
-
-        if status != "FINISHED":
-            raise ValueError(f"Cursor agent run ended with status {status}")
-        if not result_text:
-            raise ValueError("Cursor agent returned an empty message")
-        return result_text
-    finally:
-        try:
-            cursor_cloud_json("POST", f"/v1/agents/{agent_cloud_id}/archive", timeout=30)
-        except ValueError:
-            pass
 
 
 def parse_json_object(text: str) -> dict[str, Any]:

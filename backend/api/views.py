@@ -27,6 +27,7 @@ from .config_loader import (
     get_cursor_token,
     get_database_engine,
     get_database_settings,
+    get_llm_base_url,
     get_openrouter_settings,
     get_openrouter_token,
     get_provider,
@@ -123,7 +124,7 @@ def health(request: HttpRequest) -> JsonResponse:
     else:
         openrouter = {
             "status": "missing_token",
-            "detail": "OpenRouter API key is not set",
+            "detail": "API key is not set",
         }
 
     if get_cursor_token():
@@ -134,15 +135,24 @@ def health(request: HttpRequest) -> JsonResponse:
             "detail": "Cursor API key is not set",
         }
 
+    provider = get_provider()
+    if not get_openrouter_token():
+        llm: dict[str, Any] = {"status": "missing_token", "detail": "API key is not set"}
+    elif provider == "openai_compatible" and not get_llm_base_url():
+        llm = {"status": "not_configured", "detail": "Base URL is not set"}
+    else:
+        llm = {"status": "configured", "detail": ""}
+
     ok = database.get("status") == "connected"
     return JsonResponse(
         {
             "ok": ok,
             "api": api,
             "database": stamp(database),
+            "llm": stamp(llm),
             "openrouter": stamp(openrouter),
             "cursor": stamp(cursor),
-            "provider": get_provider(),
+            "provider": provider,
         }
     )
 
@@ -275,6 +285,22 @@ def rules_assignments(request: HttpRequest) -> JsonResponse:
     if not isinstance(assignments, dict):
         return _error("assignments must be an object")
     saved = store.save_assignments(assignments)
+    return JsonResponse({"assignments": saved})
+
+
+@csrf_exempt
+@require_http_methods(["GET", "PUT"])
+def skills_assignments(request: HttpRequest) -> JsonResponse:
+    if request.method == "GET":
+        return JsonResponse({"assignments": store.load_skill_assignments()})
+    try:
+        body = _json_body(request)
+    except ValueError as exc:
+        return _error(str(exc))
+    assignments = body.get("assignments")
+    if not isinstance(assignments, dict):
+        return _error("assignments must be an object")
+    saved = store.save_skill_assignments(assignments)
     return JsonResponse({"assignments": saved})
 
 
@@ -447,7 +473,7 @@ def admin_openrouter_models(request: HttpRequest) -> JsonResponse:
         models = fetch_openrouter_models(force=force)
     except ValueError as exc:
         message = str(exc)
-        status = 503 if "is not set" in message else 502
+        status = 400 if "is not set" in message else 502
         return _error(message, status=status)
     return JsonResponse({"models": models})
 
@@ -597,7 +623,7 @@ def admin_cursor_models(request: HttpRequest) -> JsonResponse:
         models = fetch_cursor_models(force=force)
     except ValueError as exc:
         message = str(exc)
-        status = 503 if "is not set" in message else 502
+        status = 400 if "is not set" in message else 502
         return _error(message, status=status)
     return JsonResponse({"models": models})
 
@@ -832,6 +858,78 @@ def runs_stream(request: HttpRequest) -> HttpResponse:
         require_llm()
     except ValueError as exc:
         return _error(str(exc), 400)
+
+    # #region agent log
+    import json as _agent_json
+    import time as _agent_time
+    import urllib.request as _agent_urllib
+
+    _payload_604 = _agent_json.dumps(
+        {
+            "sessionId": "604d40",
+            "timestamp": int(_agent_time.time() * 1000),
+            "location": "views.py:runs_stream",
+            "message": "Stream request accepted",
+            "data": {
+                "mode": mode,
+                "language": language,
+                "prompt_len": len(prompt),
+            },
+            "hypothesisId": "G",
+            "runId": "post-fix",
+        }
+    )
+    for _path_604 in (
+        r"C:\Users\armin\GitHub\helix-webui\debug-604d40.log",
+        r"C:\Users\armin\GitHub\helix-webui\.cursor\debug-604d40.log",
+        r"C:\Users\armin\GitHub\helix-api\debug-604d40.log",
+    ):
+        try:
+            with open(_path_604, "a", encoding="utf-8") as _dbg604:
+                _dbg604.write(_payload_604 + "\n")
+        except Exception:
+            pass
+    try:
+        _agent_urllib.urlopen(
+            _agent_urllib.Request(
+                "http://127.0.0.1:7706/ingest/ac544aa8-f980-4348-bd8e-331cdfbc33b6",
+                data=_payload_604.encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Debug-Session-Id": "604d40",
+                },
+                method="POST",
+            ),
+            timeout=2,
+        ).read()
+    except Exception:
+        pass
+    try:
+        with open(
+            r"C:\Users\armin\GitHub\helix-api\debug-9f5f92.log",
+            "a",
+            encoding="utf-8",
+        ) as _agent_log:
+            _agent_log.write(
+                _agent_json.dumps(
+                    {
+                        "sessionId": "9f5f92",
+                        "timestamp": int(_agent_time.time() * 1000),
+                        "location": "views.py:runs_stream",
+                        "message": "Stream request accepted",
+                        "data": {
+                            "mode": mode,
+                            "language": language,
+                            "prompt_len": len(prompt),
+                        },
+                        "hypothesisId": "B",
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
 
     response = StreamingHttpResponse(
         pipeline_events(
