@@ -16,13 +16,10 @@ Aliases: `analysis` / `research` → `analytical_report`; `both` → `analytical
 
 ## Pipeline order
 
-1. **Task Validator** — feasibility and mode check; may stop the run
-2. **Solution Strategist** — non-technical solution narrative
-3. **Technical Architect** — technical blueprint for the builder
-4. **Code Builder** — sandbox Python implementation
-5. **SQL** — review and execute every SELECT before packaging
-6. **Implementation Auditor** — verify build matches the blueprint
-7. **Response Publisher** — package `{ mode, text_report, echarts_option, grid }`
+1. **Guardian** — block dangerous prompts and check permission; may stop the run
+2. **SQL fetcher** — cheap SELECT and row-capped fetch
+3. **Response builder** — report / grid / chart from those rows
+4. **Validator** — check the result against the user prompt; fail retries SQL fetcher
 
 Do not skip steps. Do not impersonate another agent’s job.
 
@@ -36,10 +33,11 @@ Do not skip steps. Do not impersonate another agent’s job.
 
 1. SQL is **SELECT-only** (safe CTE + SELECT allowed). No writes, DDL, EXEC, or multi-statement write batches.
 2. Never request credentials, passwords, or auth-table access.
-3. Never instruct the sandbox to `pip` / `conda` install. Use only pre-installed allowlisted libraries.
+3. Never ask to install packages or run shell commands.
 4. Honor the requested **mode** exactly when planning or packaging outputs.
 5. Prefer clear handoffs: state assumptions, objects used, and what the next agent must do.
 6. If the ask is unsafe or outside `tables.md`, reject early with a plain-language reason — do not invent a violating workaround.
+7. Keep fetches cheap: filter first, bound with `TOP` / `FETCH`, do not scan all history unless asked.
 
 ## Output mindset
 

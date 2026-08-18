@@ -34,8 +34,8 @@ API listens on port 8000 by default.
 
 ## Agent pipeline
 
-1. Task Validator → 2. Solution Strategist → 3. Technical Architect → 4. Code Builder → 5. SQL → 6. Implementation Auditor → 7. Response Publisher
+1. Guardian → 2. SQL fetcher → 3. Response builder → 4. Validator (fail retries SQL fetcher)
 
-Agents use assigned rules and skills only (no instruction files). Analysis runs fetch real warehouse rows via the SQL agent and return charts/reports from those rows.
+Agents use assigned rules and skills only (no instruction files). Analysis runs fetch real warehouse rows via the SQL fetcher (row-capped) and return charts/reports from those rows.
 
 See `backend/analytics/agents/registry.md`.

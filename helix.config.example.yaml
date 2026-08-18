@@ -18,19 +18,13 @@ openrouter:
   # Per chat/completions call; pipeline agents can exceed 90s with large prompts.
   timeout_seconds: 600
   agents:
-    task_validator:
+    guardian:
       model: "auto"
-    solution_strategist:
+    sql_fetcher:
       model: "auto"
-    technical_architect:
+    response_builder:
       model: "auto"
-    code_builder:
-      model: "auto"
-    sql:
-      model: "auto"
-    implementation_auditor:
-      model: "auto"
-    response_publisher:
+    validator:
       model: "auto"
 
 
@@ -40,19 +34,13 @@ cursor:
   app_name: "Helix"
   default_model: "auto"
   agents:
-    task_validator:
+    guardian:
       model: "auto"
-    solution_strategist:
+    sql_fetcher:
       model: "auto"
-    technical_architect:
+    response_builder:
       model: "auto"
-    code_builder:
-      model: "auto"
-    sql:
-      model: "auto"
-    implementation_auditor:
-      model: "auto"
-    response_publisher:
+    validator:
       model: "auto"
 app:
   secret_key: "change-me"
@@ -97,15 +85,16 @@ sandbox:
   allow_pip_install: false
   python_executable: null # null = sys.executable from the running app
   timeout_seconds: 60
-  max_retries: 3 # code_builder runtime error loop
-  max_verify_retries: 2 # auditor fail → code_builder
+  max_retries: 3
+  max_verify_retries: 2
   max_rows: 10000
 
 sql:
   max_retries: 3
-  require_row_limit: true # TOP / FETCH / LIMIT (unless pure aggregate)
+  require_row_limit: false # set true to require TOP / FETCH / LIMIT (unless pure aggregate)
+  enforce_allowlist: false # set true to reject FROM/JOIN objects not returned by list_tables
   forbid_select_star: true
-  max_rows: 10000 # align with sandbox.max_rows
+  max_rows: 10000 # used only when require_row_limit is true
 
 # Pipeline layout is stored in helix.config.yaml as pipeline_graph (runner)
 # and pipeline_flow (Arrange stages: IF / IF NOT / Proceed). Edit in the UI.

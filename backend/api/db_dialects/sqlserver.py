@@ -20,13 +20,50 @@ def _require_pyodbc():
     return ensure_pyodbc_installed()
 
 
+class _SqlServerConnection:
+    """pyodbc connection whose close() cannot mask a prior ODBC error."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __enter__(self):
+        return self._conn
+
+    def __exit__(self, exc_type, exc, tb):
+        # Calling pyodbc close() while an ODBC exception is already set raises
+        # SystemError: pyodbc.Error returned a result with an exception set.
+        if exc_type is None:
+            self.close()
+        return False
+
+    def close(self) -> None:
+        inner = self._conn
+        if inner is None:
+            return
+        self._conn = None
+        try:
+            inner.close()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 def connect():
     pyodbc = _require_pyodbc()
     db = get_database_settings()
     if not db.get("host") or not db.get("name"):
         raise ValueError("Database host and name must be configured in Settings")
     conn_str = database_to_connection_string(db)
-    return pyodbc.connect(conn_str, timeout=15)
+    # Read-only SELECTs do not need a transaction. autocommit avoids
+    # SQLEndTran(SQL_ROLLBACK) after a dropped TDS session (08S01).
+    conn = pyodbc.connect(conn_str, timeout=15, autocommit=True)
+    try:
+        conn.timeout = 60
+    except Exception:
+        pass
+    return _SqlServerConnection(conn)
 
 
 def default_schema() -> str:

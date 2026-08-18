@@ -1,62 +1,34 @@
 {
   "shared/understand-database": [
-    "task_validator",
-    "solution_strategist",
-    "technical_architect",
-    "code_builder",
-    "sql",
-    "implementation_auditor"
+    "guardian",
+    "sql_fetcher",
+    "validator"
   ],
   "shared/generate-grid": [
-    "technical_architect",
-    "code_builder",
-    "response_publisher"
+    "response_builder"
   ],
   "shared/generate-analytical-report": [
-    "solution_strategist",
-    "technical_architect",
-    "code_builder",
-    "response_publisher"
+    "response_builder"
   ],
   "shared/text-report": [
-    "solution_strategist",
-    "technical_architect",
-    "code_builder",
-    "response_publisher"
+    "response_builder"
   ],
   "shared/echarts-response": [
-    "technical_architect",
-    "code_builder",
-    "response_publisher"
+    "response_builder"
   ],
   "shared/sql-safety": [
-    "technical_architect",
-    "code_builder",
-    "sql"
+    "sql_fetcher"
   ],
-  "shared/sandbox-python": [
-    "technical_architect",
-    "code_builder"
+  "guardian/guard-prompt": [
+    "guardian"
   ],
-  "task_validator/validate-feasibility": [
-    "task_validator"
+  "sql_fetcher/review-sql-statements": [
+    "sql_fetcher"
   ],
-  "solution_strategist/craft-solution-narrative": [
-    "solution_strategist"
+  "response_builder/package-ui-payload": [
+    "response_builder"
   ],
-  "technical_architect/write-technical-blueprint": [
-    "technical_architect"
-  ],
-  "code_builder/implement-sandbox-script": [
-    "code_builder"
-  ],
-  "sql/review-sql-statements": [
-    "sql"
-  ],
-  "implementation_auditor/audit-against-blueprint": [
-    "implementation_auditor"
-  ],
-  "response_publisher/package-ui-payload": [
-    "response_publisher"
+  "validator/match-prompt-goal": [
+    "validator"
   ]
 }

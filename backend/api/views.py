@@ -13,6 +13,7 @@ from django.views.decorators.http import require_http_methods
 from . import markdown_store as store
 from . import db_sql
 from . import docs_catalog
+from . import logs_store
 from . import results_store
 from .config_loader import (
     create_custom_agent,
@@ -70,6 +71,29 @@ def _json_body(request: HttpRequest) -> dict[str, Any]:
 
 def _error(message: str, status: int = 400) -> JsonResponse:
     return JsonResponse({"error": message}, status=status)
+
+
+def _record_log_error(
+    *,
+    kind: str,
+    message: str,
+    prompt: str = "",
+    mode: str = "",
+    language: str = "",
+    path: str = "",
+    status_code: int | None = None,
+    sql: str = "",
+) -> None:
+    logs_store.append_error(
+        kind=kind,
+        message=message,
+        prompt=prompt,
+        mode=mode,
+        language=language,
+        sql=sql,
+        path=path,
+        status_code=status_code,
+    )
 
 
 # --- Health / connectivity ---
@@ -716,6 +740,24 @@ def results_detail(request: HttpRequest, result_id: str) -> HttpResponse:
 
 
 @csrf_exempt
+@require_http_methods(["GET"])
+def logs_collection(request: HttpRequest) -> JsonResponse:
+    return JsonResponse({"logs": logs_store.list_logs()})
+
+
+@csrf_exempt
+@require_http_methods(["GET", "DELETE"])
+def logs_detail(request: HttpRequest, log_id: str) -> HttpResponse:
+    try:
+        if request.method == "GET":
+            return JsonResponse(logs_store.get_log(log_id))
+        logs_store.delete_log(log_id)
+        return HttpResponse(status=204)
+    except KeyError:
+        return _error("Log not found", 404)
+
+
+@csrf_exempt
 @require_http_methods(["GET", "POST"])
 def db_explorer_query(request: HttpRequest) -> JsonResponse:
     try:
@@ -748,8 +790,20 @@ def db_explorer_query(request: HttpRequest) -> JsonResponse:
             sort=str(payload.get("sort") or "ASC"),
         )
     except ValueError as exc:
+        _record_log_error(
+            kind="sql",
+            message=str(exc),
+            path="/api/db-explorer/query/",
+            status_code=400,
+        )
         return _error(str(exc))
     except Exception as exc:  # noqa: BLE001
+        _record_log_error(
+            kind="sql",
+            message=str(exc),
+            path="/api/db-explorer/query/",
+            status_code=502,
+        )
         return _error(str(exc), 502)
     return JsonResponse(result)
 
@@ -841,6 +895,20 @@ def _parse_run_options(
     return prompt, mode, language, report_type, chart_type, columns
 
 
+def _resolve_actor(body: dict[str, Any]) -> dict[str, Any]:
+    username = str(body.get("username") or body.get("user") or "").strip().lower()
+    if not username:
+        return {"username": "guest", "is_admin": False, "is_guest": True}
+    for user in org.list_users():
+        if user["username"] == username or user["id"] == username:
+            return {
+                "id": user["id"],
+                "username": user["username"],
+                "is_admin": bool(user["is_admin"]),
+            }
+    return {"username": username, "is_admin": False, "unknown": True}
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def runs_stream(request: HttpRequest) -> HttpResponse:
@@ -853,13 +921,21 @@ def runs_stream(request: HttpRequest) -> HttpResponse:
     if isinstance(parsed, JsonResponse):
         return parsed
     prompt, mode, language, report_type, chart_type, columns = parsed
+    actor = _resolve_actor(body)
 
     try:
         require_llm()
     except ValueError as exc:
+        _record_log_error(
+            kind="llm",
+            message=str(exc),
+            prompt=prompt,
+            mode=mode,
+            language=language,
+            path="/api/runs/stream",
+            status_code=400,
+        )
         return _error(str(exc), 400)
-
-    # #region agent log
     import json as _agent_json
     import time as _agent_time
     import urllib.request as _agent_urllib
@@ -939,6 +1015,7 @@ def runs_stream(request: HttpRequest) -> HttpResponse:
             report_type=report_type,
             chart_type=chart_type,
             columns=columns,
+            actor=actor,
         ),
         content_type="text/event-stream",
     )
@@ -960,9 +1037,19 @@ def chat(request: HttpRequest) -> JsonResponse:
     if isinstance(parsed, JsonResponse):
         return parsed
     prompt, mode, language, report_type, chart_type, columns = parsed
+    actor = _resolve_actor(body)
     try:
         require_llm()
     except ValueError as exc:
+        _record_log_error(
+            kind="llm",
+            message=str(exc),
+            prompt=prompt,
+            mode=mode,
+            language=language,
+            path="/api/chat",
+            status_code=400,
+        )
         return _error(str(exc), 400)
     try:
         result = run_pipeline_sync(
@@ -972,9 +1059,23 @@ def chat(request: HttpRequest) -> JsonResponse:
             report_type=report_type,
             chart_type=chart_type,
             columns=columns,
+            actor=actor,
         )
     except ValueError as exc:
-        return _error(str(exc), 502)
+        message = str(exc)
+        lowered = message.lower()
+        if (
+            lowered.startswith("llm ")
+            or "llm request" in lowered
+            or "llm returned" in lowered
+            or "sql server closed" in lowered
+            or "pyodbc" in lowered
+            or "exception set" in lowered
+            or "08s01" in lowered
+            or "communication link" in lowered
+        ):
+            return _error(message, 502)
+        return _error(message, 400)
     return JsonResponse(result)
 
 

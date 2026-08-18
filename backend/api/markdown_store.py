@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 from django.conf import settings
 
-from .agents import AGENT_BY_ID, AGENT_IDS
+from .agents import AGENT_IDS
 
 SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,120}$")
 _NUMERIC_PREFIX_RE = re.compile(r"^\d+[-_]")
@@ -33,31 +33,25 @@ RULE_DISPLAY_NAMES = {
     "security": "Security",
     "output-contract": "Output contract",
     "base-behavior": "Base behavior",
-    "feasibility": "Feasibility",
-    "non-technical": "Non-technical",
-    "blueprint": "Blueprint",
-    "implement": "Implement",
     "select-only": "Select only",
-    "verify-plan": "Verify plan",
     "package-payload": "Package payload",
     "product-scope": "Product scope",
+    "fast-query": "Fast query",
+    "guard-prompt": "Guard prompt",
+    "match-goal": "Match goal",
 }
 
 SKILL_DISPLAY_NAMES = {
     "echarts-response": "ECharts response",
-    "sandbox-python": "Sandbox Python",
     "sql-safety": "SQL safety",
     "text-report": "Text report",
-    "validate-feasibility": "Validate feasibility",
-    "craft-solution-narrative": "Craft solution narrative",
-    "write-technical-blueprint": "Write technical blueprint",
-    "implement-sandbox-script": "Implement sandbox script",
     "review-sql-statements": "Review SQL statements",
-    "audit-against-blueprint": "Audit against blueprint",
     "package-ui-payload": "Package UI payload",
     "understand-database": "Understand database",
     "generate-grid": "Generate grid",
     "generate-analytical-report": "Generate analytical report",
+    "guard-prompt": "Guard prompt",
+    "match-prompt-goal": "Match prompt goal",
 }
 
 

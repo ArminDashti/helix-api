@@ -18,6 +18,9 @@ services:
 
   helix-api:
     image: ${IMAGE_TAG:-helix-api:latest}
+    build:
+      context: .
+      dockerfile: dockerfile
     container_name: helix-api
     restart: unless-stopped
     depends_on:

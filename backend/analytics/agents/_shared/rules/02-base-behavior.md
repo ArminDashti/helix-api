@@ -8,4 +8,5 @@ Apply to every agent. Complements security, product-scope, and output-contract r
 4. Pass clear handoffs: objects, metrics, grain, SQL intent, and which artifacts the next agent must produce.
 5. Reject unsafe or out-of-schema asks as early as your step allows; do not silently invent data sources or numbers.
 6. Prefer short, structured outputs over long prose when conveying plans, rejections, or checklists.
-7. When revising after a rejection (SQL fail, sandbox error, auditor fail), fix the cited issues without weakening SELECT-only or row-bound constraints.
+7. Prefer the cheapest warehouse plan that answers the ask (filters first, recent period, `TOP`). Do not add extra years, joins, or metrics.
+8. When revising after a rejection (SQL fail or validator fail), fix the cited issues without weakening SELECT-only, row-bound, or fast-query constraints.

@@ -2,51 +2,54 @@
 
 AGENT_PIPELINE = [
     {
-        "id": "task_validator",
-        "name": "Task Validator",
-        "human_name": "Tommy",
-        "description": "Validates the user prompt and mode",
+        "id": "guardian",
+        "name": "Guardian",
+        "human_name": "Gale",
+        "description": "Block dangerous prompts and check the caller's permission",
     },
     {
-        "id": "solution_strategist",
-        "name": "Solution Strategist",
-        "human_name": "Sara",
-        "description": "Non-technical solution narrative",
+        "id": "sql_fetcher",
+        "name": "SQL fetcher",
+        "human_name": "Ned",
+        "description": "Write a cheap SELECT and fetch warehouse rows",
     },
     {
-        "id": "technical_architect",
-        "name": "Technical Architect",
-        "human_name": "James",
-        "description": "Technical blueprint for the builder",
+        "id": "response_builder",
+        "name": "Response builder",
+        "human_name": "Remy",
+        "description": "Build report, grid, and chart from fetched rows",
     },
     {
-        "id": "code_builder",
-        "name": "Code Builder",
-        "human_name": "Emma",
-        "description": "Implement as sandbox Python",
-    },
-    {
-        "id": "sql",
-        "name": "SQL",
-        "human_name": "Noah",
-        "description": "Fetch warehouse data and enforce SQL validation rules",
-    },
-    {
-        "id": "implementation_auditor",
-        "name": "Implementation Auditor",
-        "human_name": "Lily",
-        "description": "Check the work against the Technical Architect blueprint",
-    },
-    {
-        "id": "response_publisher",
-        "name": "Response Publisher",
-        "human_name": "Owen",
-        "description": "Package UI payload",
+        "id": "validator",
+        "name": "Validator",
+        "human_name": "Vera",
+        "description": "Check the result against the user prompt",
     },
 ]
 
 AGENT_IDS = [a["id"] for a in AGENT_PIPELINE]
 AGENT_BY_ID = {a["id"]: a for a in AGENT_PIPELINE}
+
+LEGACY_AGENT_IDS = frozenset(
+    {
+        "task_validator",
+        "solution_strategist",
+        "technical_architect",
+        "code_builder",
+        "sql",
+        "sql_guardian",
+        "implementation_auditor",
+        "response_publisher",
+    }
+)
+
+LEGACY_AGENT_RENAMES = {
+    "task_validator": "guardian",
+    "sql": "sql_fetcher",
+    "sql_guardian": "sql_fetcher",
+    "response_publisher": "response_builder",
+    "implementation_auditor": "validator",
+}
 
 
 def is_builtin_agent(agent_id: str) -> bool:

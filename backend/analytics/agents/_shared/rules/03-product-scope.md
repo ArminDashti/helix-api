@@ -5,7 +5,7 @@ Helix only understands the warehouse catalog and produces analysis from SELECT r
 ## In scope
 
 - Read allowlisted tables/views (`tables.md` / docs)
-- Write a single SELECT (or CTE + SELECT)
+- Write a single SELECT (or CTE + SELECT) that is cheap enough to finish (filter first, `TOP`, sargable dates)
 - Produce an analytical report, a grid, a chart, or a combination required by `mode`
 
 ## Out of scope

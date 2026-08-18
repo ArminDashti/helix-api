@@ -25,4 +25,4 @@ Agents are **arranged and executed** (Markdown + `helix.config.example.yaml` mod
 3. Register in `registry.md`.
 4. Add `openrouter.agents.<agent_id>.model` in `helix.config.example.yaml` / your local `helix.config.yaml`.
 
-See [registry.md](registry.md) for the current seven-agent pipeline.
+See [registry.md](registry.md) for the current four-agent pipeline.

@@ -53,10 +53,8 @@ def _dbg(location: str, message: str, data: dict[str, Any], hypothesis_id: str) 
         pass
     # #endregion
 
-_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _LIMIT = re.compile(r"\b(LIMIT|TOP|FETCH)\b", re.IGNORECASE)
 _STAR = re.compile(r"SELECT\s+\*", re.IGNORECASE)
-_WITH = re.compile(r"^\s*WITH\b", re.IGNORECASE)
 _SELECT = re.compile(r"^\s*(WITH\b[\s\S]+?\bSELECT\b|SELECT\b)", re.IGNORECASE)
 
 _SALESLT_TABLES = (
@@ -126,7 +124,7 @@ def _allowlisted_names() -> set[str]:
             live_names.append(live_name)
             live_full.append(str(table.get("full_name") or ""))
     except Exception as exc:  # noqa: BLE001 — debug: list_tables can fail
-        list_error = f"{type(exc).__name__}: {exc}"
+        list_error = f"{type(exc).__name__}: {_exception_text(exc)}"
     names.discard("")
     # #region agent log
     _dbg(
@@ -165,75 +163,21 @@ def validate_select(sql: str) -> str:
     if settings["require_row_limit"] and not _LIMIT.search(statement):
         if "group by" not in statement.lower():
             raise ValueError("SQL must include LIMIT, TOP, or FETCH")
-    allowed = _allowlisted_names()
-    skip = {
-        "select",
-        "from",
-        "where",
-        "and",
-        "or",
-        "join",
-        "left",
-        "right",
-        "inner",
-        "outer",
-        "on",
-        "as",
-        "group",
-        "by",
-        "order",
-        "limit",
-        "top",
-        "fetch",
-        "with",
-        "count",
-        "sum",
-        "avg",
-        "min",
-        "max",
-        "distinct",
-        "case",
-        "when",
-        "then",
-        "else",
-        "end",
-        "null",
-        "not",
-        "in",
-        "is",
-        "like",
-        "between",
-        "having",
-        "union",
-        "all",
-        "asc",
-        "desc",
-        "offset",
-        "rows",
-        "only",
-        "saleslt",
-        "main",
-        "dbo",
-    }
-    for ident in _IDENT.findall(statement):
-        lower = ident.lower()
-        if lower in skip or lower.startswith("col"):
-            continue
-        if ident[:1].isupper() or ident in SAMPLE_TABLES:
-            if lower not in allowed and ident not in SAMPLE_TABLES:
-                # Column names are allowed; only flag known table-like tokens
-                # that are not in the allowlist when they appear after FROM/JOIN.
-                continue
     from_tokens = re.findall(
         r"\b(?:FROM|JOIN)\s+(?:\[?([A-Za-z_][A-Za-z0-9_]*)\]?\.)?\[?([A-Za-z_][A-Za-z0-9_]*)\]?",
         statement,
         re.IGNORECASE,
     )
+    enforce_allowlist = bool(settings.get("enforce_allowlist"))
+    allowed: set[str] = set()
+    if enforce_allowlist:
+        allowed = _allowlisted_names()
     # #region agent log
     _dbg(
         "sql_execute.py:validate_select",
         "FROM/JOIN tokens vs allowlist",
         {
+            "enforce_allowlist": enforce_allowlist,
             "from_tokens": [{"schema": schema, "table": table} for schema, table in from_tokens],
             "allowed_contains_tables": {
                 table.lower(): table.lower() in allowed for _, table in from_tokens
@@ -243,21 +187,85 @@ def validate_select(sql: str) -> str:
         "A",
     )
     # #endregion
-    for schema, table in from_tokens:
-        if table.lower() not in allowed:
-            raise ValueError(f"Table {table} is not on the allowlist")
-        _ = schema
-    max_rows = int(settings["max_rows"])
-    if not _LIMIT.search(statement):
-        statement = f"{statement} LIMIT {max_rows}"
+    if enforce_allowlist:
+        for schema, table in from_tokens:
+            if table.lower() not in allowed:
+                raise ValueError(f"Table {table} is not on the allowlist")
+            _ = schema
     return statement
 
 
-def execute_select(sql: str) -> dict[str, Any]:
+def _ensure_sqlserver_top(statement: str, max_rows: int) -> str:
+    """Cap a SQL Server SELECT so the warehouse does not stream an unbounded result."""
+    if _LIMIT.search(statement):
+        return statement
+    return re.sub(
+        r"(?i)(\bSELECT)(\s+DISTINCT\b)?(?![\s\S]*\bSELECT\b)",
+        rf"\1\2 TOP ({int(max_rows)})",
+        statement,
+        count=1,
+    )
+
+
+def _exception_text(exc: BaseException) -> str:
+    """Stringify driver errors without calling str() first.
+
+    str(pyodbc.Error) can itself raise SystemError when an ODBC exception is
+    already set, which replaces the original 08S01 message.
+    """
+    chunks: list[str] = [type(exc).__name__]
+    try:
+        args = getattr(exc, "args", ())
+        if args:
+            chunks.append(" ".join(str(arg) for arg in args))
+    except Exception:
+        pass
+    try:
+        rendered = str(exc)
+        if rendered and rendered not in chunks:
+            chunks.append(rendered)
+    except Exception as stringify_exc:
+        chunks.append(type(stringify_exc).__name__)
+        try:
+            chunks.append(str(stringify_exc))
+        except Exception:
+            pass
+    return " ".join(chunk for chunk in chunks if chunk)
+
+
+def _is_communication_link_failure(exc: BaseException) -> bool:
+    text = _exception_text(exc)
+    lowered = text.lower()
+    return (
+        "08S01" in text
+        or "communication link failure" in lowered
+        or "returned a result with an exception set" in lowered
+        or (type(exc).__name__ == "SystemError" and "pyodbc" in lowered)
+    )
+
+
+def _sql_error_message(exc: BaseException) -> str:
+    if _is_communication_link_failure(exc):
+        return (
+            "SQL Server closed the connection while running the query. "
+            "A SELECT without TOP can return too many rows, or the warehouse "
+            "dropped a long query. Retry with a narrower SELECT (add TOP / WHERE)."
+        )
+    return _exception_text(exc)
+
+
+def execute_select(sql: str, *, row_cap: int | None = None) -> dict[str, Any]:
     statement = validate_select(sql)
     settings = get_sql_settings()
     max_rows = int(settings["max_rows"])
+    if row_cap is not None:
+        max_rows = max(1, min(max_rows, int(row_cap)))
+    retries = int(settings["max_retries"])
     db = get_database_settings()
+    from .db_dialects.base import normalize_engine
+
+    if normalize_engine(db.get("engine")) == "sqlserver":
+        statement = _ensure_sqlserver_top(statement, max_rows)
     # #region agent log
     _dbg(
         "sql_execute.py:execute_select",
@@ -271,29 +279,43 @@ def execute_select(sql: str) -> dict[str, Any]:
         "C",
     )
     # #endregion
-    try:
-        with connect() as conn:
-            cur = conn.cursor()
-            cur.execute(statement)
-            desc = cur.description or []
-            columns = [str(col[0]) for col in desc]
-            fetched = cur.fetchmany(max_rows)
-    except Exception as exc:
-        # #region agent log
-        _dbg(
-            "sql_execute.py:execute_select",
-            "execute failed",
-            {
-                "engine": db.get("engine"),
-                "db_name": db.get("name"),
-                "exc_type": type(exc).__name__,
-                "exc": str(exc)[:500],
-                "statement": statement[:800],
-            },
-            "C",
-        )
-        # #endregion
-        raise
+    fetched: list[Any] = []
+    columns: list[str] = []
+    last_exc: Exception | None = None
+    for attempt in range(max(1, retries)):
+        try:
+            with connect() as conn:
+                cur = conn.cursor()
+                cur.execute(statement)
+                desc = cur.description or []
+                columns = [str(col[0]) for col in desc]
+                fetched = list(cur.fetchmany(max_rows))
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            # #region agent log
+            _dbg(
+                "sql_execute.py:execute_select",
+                "execute failed",
+                {
+                    "engine": db.get("engine"),
+                    "db_name": db.get("name"),
+                    "exc_type": type(exc).__name__,
+                    "exc": _exception_text(exc)[:500],
+                    "attempt": attempt + 1,
+                    "statement": statement[:800],
+                },
+                "C",
+            )
+            # #endregion
+            if _is_communication_link_failure(exc) and attempt + 1 < retries:
+                continue
+            # Do not use `raise ... from exc`: chaining a live pyodbc.Error
+            # becomes SystemError: returned a result with an exception set.
+            raise ValueError(_sql_error_message(exc))
+    if last_exc is not None:
+        raise ValueError(_sql_error_message(last_exc))
     rows = []
     for row in fetched:
         if hasattr(row, "keys"):

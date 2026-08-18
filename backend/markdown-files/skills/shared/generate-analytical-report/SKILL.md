@@ -12,6 +12,6 @@ description: Write a text analysis from fetched warehouse rows at the requested 
 ## Instructions
 
 1. Base every claim on fetched rows (or a stated empty result). No invented numbers.
-2. Depth from `report_type`: `low` = short findings; `medium` = findings plus context; `high` = findings, breakdowns, caveats.
+2. Depth from `report_type`: `low` = short findings; `medium` = findings plus context; `high` = findings, breakdowns, caveats. Do not ask the SQL fetcher for extra years or joins to pad the report.
 3. Name units, time grain, and filters when they affect the claim. For `analytical_report_chart`, explain the chart that will be shown.
 4. Write the report in the run `language`: Persian when `language` is `fa`, English when `en`. Do not translate SQL identifiers.

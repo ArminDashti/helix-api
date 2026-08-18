@@ -1,9 +1,12 @@
+﻿*.exe
+*.EXE
 *.exe
 *.EXE
 
 # Local secrets / config (use helix.config.example.yaml as the template)
 helix.config.yaml
 backend/markdown-files/results.json
+backend/markdown-files/logs.json
 
 # Python
 __pycache__/
@@ -51,6 +54,10 @@ backend/data/*.sqlite3
 
 # github-commit-push-all: auto-ignore large files (>5MB)
 
-# graft's local graph cache — regenerable, not committed (run `graft build`).
+# graft's local graph cache â€” regenerable, not committed (run `graft build`).
 graft/
 .claude/
+
+# Local scratch query files
+backend/_tmp_query.py
+.armin/tmp-*

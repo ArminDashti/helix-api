@@ -17,7 +17,14 @@ from typing import Any
 import yaml
 from django.conf import settings
 
-from .agents import AGENT_BY_ID, AGENT_IDS, AGENT_PIPELINE, is_builtin_agent
+from .agents import (
+    AGENT_BY_ID,
+    AGENT_IDS,
+    AGENT_PIPELINE,
+    LEGACY_AGENT_IDS,
+    LEGACY_AGENT_RENAMES,
+    is_builtin_agent,
+)
 
 AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 TOKEN_ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -42,23 +49,17 @@ DEFAULT_DATABASE = {
 }
 
 DEFAULT_AGENT_MODELS = {
-    "task_validator": "auto",
-    "solution_strategist": "auto",
-    "technical_architect": "auto",
-    "code_builder": "auto",
-    "sql": "auto",
-    "implementation_auditor": "auto",
-    "response_publisher": "auto",
+    "guardian": "auto",
+    "sql_fetcher": "auto",
+    "response_builder": "auto",
+    "validator": "auto",
 }
 
 DEFAULT_CURSOR_AGENT_MODELS = {
-    "task_validator": "auto",
-    "solution_strategist": "auto",
-    "technical_architect": "auto",
-    "code_builder": "auto",
-    "sql": "auto",
-    "implementation_auditor": "auto",
-    "response_publisher": "auto",
+    "guardian": "auto",
+    "sql_fetcher": "auto",
+    "response_builder": "auto",
+    "validator": "auto",
 }
 
 DEFAULT_OPENROUTER = {
@@ -106,28 +107,71 @@ def ensure_config_exists() -> Path:
 
 DEFAULT_SQL = {
     "max_retries": 3,
-    "require_row_limit": True,
+    "require_row_limit": False,
+    "enforce_allowlist": False,
     "forbid_select_star": True,
     "max_rows": 10000,
 }
 
 
-def _rename_sql_guardian(obj: Any) -> Any:
-    """Rewrite legacy sql_guardian ids/keys to sql."""
-    if isinstance(obj, dict):
-        out: dict[str, Any] = {}
-        for key, value in obj.items():
-            new_key = "sql" if key == "sql_guardian" else key
-            out[new_key] = _rename_sql_guardian(value)
-        return out
-    if isinstance(obj, list):
-        return [
-            "sql" if item == "sql_guardian" else _rename_sql_guardian(item)
-            for item in obj
-        ]
-    if obj == "sql_guardian":
-        return "sql"
-    return obj
+def _migrate_agent_model_map(agents: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in agents.items():
+        if key in LEGACY_AGENT_IDS and key not in LEGACY_AGENT_RENAMES:
+            continue
+        out[LEGACY_AGENT_RENAMES.get(key, key)] = value
+    return out
+
+
+def _migrate_legacy_agent_ids(data: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite retired pipeline agent ids in agent-model maps and graphs only."""
+    migrated = deepcopy(data)
+    for section in ("openrouter", "cursor"):
+        block = migrated.get(section)
+        if isinstance(block, dict) and isinstance(block.get("agents"), dict):
+            block["agents"] = _migrate_agent_model_map(block["agents"])
+    deleted = migrated.get("deleted_agents")
+    if isinstance(deleted, list):
+        next_deleted: list[str] = []
+        for item in deleted:
+            value = str(item).strip()
+            if value in LEGACY_AGENT_IDS and value not in LEGACY_AGENT_RENAMES:
+                continue
+            next_deleted.append(LEGACY_AGENT_RENAMES.get(value, value))
+        migrated["deleted_agents"] = next_deleted
+    graph = migrated.get("pipeline_graph")
+    if isinstance(graph, dict):
+        if str(graph.get("entry") or "") in LEGACY_AGENT_RENAMES:
+            graph["entry"] = LEGACY_AGENT_RENAMES[str(graph["entry"])]
+        for node in graph.get("nodes") or []:
+            if isinstance(node, dict):
+                node_id = str(node.get("id") or "")
+                if node_id in LEGACY_AGENT_RENAMES:
+                    node["id"] = LEGACY_AGENT_RENAMES[node_id]
+        for edge in graph.get("edges") or []:
+            if not isinstance(edge, dict):
+                continue
+            for end in ("source", "target"):
+                value = str(edge.get(end) or "")
+                if value in LEGACY_AGENT_RENAMES:
+                    edge[end] = LEGACY_AGENT_RENAMES[value]
+    return migrated
+
+
+def _drop_stale_pipeline_graph(data: dict[str, Any]) -> dict[str, Any]:
+    graph = data.get("pipeline_graph")
+    if not isinstance(graph, dict):
+        return data
+    node_ids = {
+        str(node.get("id") or "").strip()
+        for node in (graph.get("nodes") or [])
+        if isinstance(node, dict)
+    }
+    if node_ids & LEGACY_AGENT_IDS:
+        data = dict(data)
+        data.pop("pipeline_graph", None)
+        data.pop("pipeline_flow", None)
+    return data
 
 
 def load_config() -> dict[str, Any]:
@@ -135,7 +179,7 @@ def load_config() -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         data = {}
-    migrated = _rename_sql_guardian(data)
+    migrated = _drop_stale_pipeline_graph(_migrate_legacy_agent_ids(data))
     if not isinstance(migrated, dict):
         migrated = {}
     if migrated != data:
@@ -319,6 +363,7 @@ def database_to_connection_string(db: dict[str, Any] | None = None) -> str:
         f"Pwd={db['password']}",
         f"Encrypt={'yes' if db['encrypt'] else 'no'}",
         f"TrustServerCertificate={'yes' if db['trust_server_certificate'] else 'no'}",
+        "Connection Timeout=15",
     ]
     return ";".join(parts)
 
@@ -1287,7 +1332,8 @@ def get_sql_settings() -> dict[str, Any]:
         merged["max_rows"] = max(1, int(merged.get("max_rows") or 10000))
     except (TypeError, ValueError):
         merged["max_rows"] = 10000
-    merged["require_row_limit"] = bool(merged.get("require_row_limit", True))
+    merged["require_row_limit"] = bool(merged.get("require_row_limit", False))
+    merged["enforce_allowlist"] = bool(merged.get("enforce_allowlist", False))
     merged["forbid_select_star"] = bool(merged.get("forbid_select_star", True))
     return merged
 

@@ -5,8 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from .agents import AGENT_BY_ID
-from .config_loader import get_all_agent_metas, known_agent_ids, load_config, save_config
+from .config_loader import known_agent_ids, load_config, save_config
 
 WHEN_TYPES = frozenset({"always", "on_success", "on_failure", "on_retry", "on_status"})
 EDGE_ROLES = frozenset({"then", "else", "loop"})
@@ -21,40 +20,48 @@ THEN_ACTIONS = frozenset({"proceed", "stop"})
 
 
 def default_pipeline_graph() -> dict[str, Any]:
-    """Linear builtin agents chained with Go to stages."""
+    """Guardian → SQL fetcher → Response builder → Validator."""
     flow = default_pipeline_flow()
     return compile_pipeline_flow(flow)
 
 
 def default_pipeline_flow() -> dict[str, Any]:
-    metas = [
-        meta
-        for meta in get_all_agent_metas()
-        if meta.get("builtin") or meta["id"] in AGENT_BY_ID
-    ]
-    if not metas:
-        metas = list(get_all_agent_metas())
-    ids = [meta["id"] for meta in metas]
-    children: list[dict[str, Any]] = []
-    for i, agent_id in enumerate(ids[:-1]):
-        children.append(
+    """Guardian → SQL fetcher → Response builder → Validator (fail retries SQL)."""
+    return {
+        "type": "stages",
+        "children": [
             {
                 "type": "stage",
-                "agent_id": agent_id,
+                "agent_id": "guardian",
                 "action": "proceed",
-                "next_agent_id": ids[i + 1],
-            }
-        )
-    if len(ids) == 1:
-        children.append(
+                "then": "proceed",
+                "next_agent_id": "sql_fetcher",
+            },
             {
                 "type": "stage",
-                "agent_id": ids[0],
+                "agent_id": "sql_fetcher",
                 "action": "proceed",
-                "then": "stop",
-            }
-        )
-    return {"type": "stages", "children": children}
+                "then": "proceed",
+                "next_agent_id": "response_builder",
+            },
+            {
+                "type": "stage",
+                "agent_id": "response_builder",
+                "action": "proceed",
+                "then": "proceed",
+                "next_agent_id": "validator",
+            },
+            {
+                "type": "stage",
+                "agent_id": "validator",
+                "action": "if",
+                "expected": "fail",
+                "result_op": "equal",
+                "then": "proceed",
+                "next_agent_id": "sql_fetcher",
+            },
+        ],
+    }
 
 
 def _normalize_when(raw: Any) -> dict[str, Any]:

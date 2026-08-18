@@ -19,6 +19,16 @@ Primary objects:
 - Sales.EtebarMoshtary
 - Sales.PrintFaktor
 
+# Query speed
+
+Invoice facts are large. Always filter `Sales.DarkhastFaktor` first, then join `Sales.DarkhastFaktorSatr`.
+
+- Named centers → `h.ccMarkazPakhsh` (resolve names to ids on a small lookup; do not LIKE the fact table).
+- Time → `h.Sal` and/or `h.TarikhFaktor >= DATEADD(...)`. Never `dbo.CalculatePersianDate(h.TarikhFaktor)` in WHERE/JOIN/GROUP BY.
+- Default window if the user did not ask all years: current `Sal` or last 12 months.
+- Metrics: `Tedad1` (quantity), `MablaghForoshKhalesKala` (net sale). If catalog has no cost, use net sale for “سود خالص” — do not scan extra schemas.
+- Rankings: aggregate once, `ROW_NUMBER() OVER (PARTITION BY h.ccMarkazPakhsh ORDER BY metric DESC)`, keep `rn = 1`, outer `TOP`.
+
 # Catalog
 
 ## Warehouse.Anbar

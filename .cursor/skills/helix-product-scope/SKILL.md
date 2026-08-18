@@ -28,7 +28,7 @@ metadata:
 2. Match modes to `_package_result` and `VALID_MODES` (`auto`, `chart`, `grid`, `analytical_report`, `analytical_report_chart`; aliases `analysis`/`research`/`both`).
 3. Change pipeline markdown in `backend/analytics/agents/` and copy into `backend/markdown-files/` (runtime does not refresh if files already exist).
 4. Keep `validate_select` / FORBIDDEN_SQL. Do not add CRUD resources, write SQL, EXEC, or a dashboard type.
-5. Point agents at shared rules `product-scope`, `security`, `output-contract` and skills `understand-database`, `generate-grid`, `generate-analytical-report`, `echarts-response`.
+5. Point Guardian, SQL fetcher, Response builder, and Validator at shared rules `product-scope`, `security`, `output-contract` and skills `understand-database`, `generate-grid`, `generate-analytical-report`, `echarts-response`.
 
 ## Always
 
