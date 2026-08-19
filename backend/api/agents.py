@@ -3,27 +3,28 @@
 AGENT_PIPELINE = [
     {
         "id": "guardian",
-        "name": "Guardian",
-        "human_name": "Gale",
+        "name": "guardian",
         "description": "Block dangerous prompts and check the caller's permission",
     },
     {
-        "id": "sql_fetcher",
-        "name": "SQL fetcher",
-        "human_name": "Ned",
-        "description": "Write a cheap SELECT and fetch warehouse rows",
-    },
-    {
-        "id": "response_builder",
-        "name": "Response builder",
-        "human_name": "Remy",
-        "description": "Build report, grid, and chart from fetched rows",
+        "id": "data-gatherer",
+        "name": "data-gatherer",
+        "description": "Write a cheap SELECT from catalog and references, then fetch rows",
     },
     {
         "id": "validator",
-        "name": "Validator",
-        "human_name": "Vera",
-        "description": "Check the result against the user prompt",
+        "name": "validator",
+        "description": "Check gathered or built results against the user prompt",
+    },
+    {
+        "id": "result-builder",
+        "name": "result-builder",
+        "description": "Build report text from fetched rows",
+    },
+    {
+        "id": "publisher",
+        "name": "publisher",
+        "description": "Package report, grid, and chart for the UI",
     },
 ]
 
@@ -37,20 +38,33 @@ LEGACY_AGENT_IDS = frozenset(
         "technical_architect",
         "code_builder",
         "sql",
+        "sql_fetcher",
         "sql_guardian",
-        "implementation_auditor",
+        "response_builder",
         "response_publisher",
+        "implementation_auditor",
     }
 )
 
 LEGACY_AGENT_RENAMES = {
     "task_validator": "guardian",
-    "sql": "sql_fetcher",
-    "sql_guardian": "sql_fetcher",
-    "response_publisher": "response_builder",
+    "sql": "data-gatherer",
+    "sql_fetcher": "data-gatherer",
+    "sql_guardian": "data-gatherer",
+    "response_builder": "result-builder",
+    "response_publisher": "result-builder",
     "implementation_auditor": "validator",
 }
 
 
+def resolve_agent_definition_id(agent_id: str) -> str:
+    """Map graph instance id (e.g. validator__2) to roster agent id."""
+    if "__" in agent_id:
+        base = agent_id.rsplit("__", 1)[0]
+        if base in AGENT_BY_ID or base in LEGACY_AGENT_RENAMES:
+            return LEGACY_AGENT_RENAMES.get(base, base)
+    return LEGACY_AGENT_RENAMES.get(agent_id, agent_id)
+
+
 def is_builtin_agent(agent_id: str) -> bool:
-    return agent_id in AGENT_BY_ID
+    return resolve_agent_definition_id(agent_id) in AGENT_BY_ID

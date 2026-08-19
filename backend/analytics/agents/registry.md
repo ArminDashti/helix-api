@@ -4,17 +4,21 @@ Pipeline order:
 
 ```text
 guardian
-  → sql_fetcher
-  → response_builder
+  → data-gatherer
   → validator
-      (fail → sql_fetcher, limited)
+  → result-builder
+  → validator
+  → publisher
+      (validator fail → data-gatherer or result-builder, limited)
 ```
 
-| # | Id | Display name | When to use |
-|---|-----|--------------|-------------|
-| 1 | `guardian` | Guardian | Block dangerous prompts and check permission |
-| 2 | `sql_fetcher` | SQL fetcher | Cheap SELECT + fetch (row-capped) |
-| 3 | `response_builder` | Response builder | Report / grid / chart from those rows |
-| 4 | `validator` | Validator | Does the result match the user prompt? |
+| # | Id | When to use |
+|---|-----|-------------|
+| 1 | `guardian` | Block dangerous prompts and check permission |
+| 2 | `data-gatherer` | Cheap SELECT + fetch (row-capped) |
+| 3 | `validator` | Does the fetch match the user prompt? |
+| 4 | `result-builder` | Report from fetched rows |
+| 5 | `validator` | Does the built result match the prompt? |
+| 6 | `publisher` | Package UI payload |
 
 **Models:** set per agent under `openrouter.agents.<id>.model` in `helix.config.yaml` (see `helix.config.example.yaml`). Never hardcode models in `AGENT.md`.

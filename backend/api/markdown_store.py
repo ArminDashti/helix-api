@@ -30,22 +30,27 @@ RULE_ID_MIGRATION = {
 }
 
 RULE_DISPLAY_NAMES = {
-    "security": "Security",
+    "core-behavior": "Core behavior",
     "output-contract": "Output contract",
-    "base-behavior": "Base behavior",
-    "select-only": "Select only",
+    "warehouse-sql": "Warehouse SQL",
     "package-payload": "Package payload",
-    "product-scope": "Product scope",
-    "fast-query": "Fast query",
     "guard-prompt": "Guard prompt",
     "match-goal": "Match goal",
+    "build-result": "Build result",
+    # Legacy names (migration / old configs)
+    "security": "Security",
+    "base-behavior": "Base behavior",
+    "select-only": "Select only",
+    "product-scope": "Product scope",
+    "fast-query": "Fast query",
 }
 
 SKILL_DISPLAY_NAMES = {
     "echarts-response": "ECharts response",
     "sql-safety": "SQL safety",
     "text-report": "Text report",
-    "review-sql-statements": "Review SQL statements",
+    "gather-data": "Gather data",
+    "publish-result": "Publish result",
     "package-ui-payload": "Package UI payload",
     "understand-database": "Understand database",
     "generate-grid": "Generate grid",
@@ -168,12 +173,26 @@ def migrate_rule_ids() -> None:
         )
 
 
-def ensure_skill_display_names() -> None:
-    ensure_dirs()
+def _iter_skill_files() -> list[tuple[str, Path]]:
+    """List (scope, SKILL.md path) without recursive glob (slow on bind mounts)."""
     base = skills_dir()
     if not base.is_dir():
-        return
-    for skill_md in base.rglob("SKILL.md"):
+        return []
+    items: list[tuple[str, Path]] = []
+    for scope_name in ["shared", *_agent_scope_ids()]:
+        scope_path = base / scope_name
+        if not scope_path.is_dir():
+            continue
+        for skill_folder in sorted(scope_path.iterdir()):
+            skill_md = skill_folder / "SKILL.md"
+            if skill_folder.is_dir() and skill_md.exists():
+                items.append((scope_name, skill_md))
+    return items
+
+
+def ensure_skill_display_names() -> None:
+    ensure_dirs()
+    for _scope, skill_md in _iter_skill_files():
         skill_id = skill_md.parent.name
         wanted = SKILL_DISPLAY_NAMES.get(skill_id)
         if not wanted:
@@ -253,17 +272,20 @@ def _skill_path(scope: str, skill_id: str) -> Path:
 
 
 def _skill_has_any() -> bool:
-    base = skills_dir()
-    if not base.is_dir():
-        return False
-    return any(base.rglob("SKILL.md"))
+    return bool(_iter_skill_files())
+
+
+_skills_seeded = False
 
 
 def seed_skills_if_empty() -> None:
     """Seed skills from analytics/agents when markdown-files/skills is empty."""
+    global _skills_seeded
+    if _skills_seeded:
+        return
     ensure_dirs()
     if _skill_has_any():
-        ensure_skill_display_names()
+        _skills_seeded = True
         return
 
     agents_root = _agents_source_dir()
@@ -301,6 +323,7 @@ def seed_skills_if_empty() -> None:
                     ),
                     encoding="utf-8",
                 )
+    _skills_seeded = True
 
 
 def _skill_assign_key(scope: str, skill_id: str) -> str:
@@ -477,8 +500,6 @@ def _read_skill(scope: str, skill_id: str) -> dict:
 
 def list_skills(scope: str | None = None) -> list[dict]:
     ensure_dirs()
-    seed_skills_if_empty()
-    ensure_skill_display_names()
     items: list[dict] = []
 
     def collect(scope_name: str) -> None:
@@ -646,6 +667,127 @@ def seed_if_empty() -> None:
 # --- Instructions ---
 
 
+def migrate_pipeline_agent_ids() -> None:
+    """Rename legacy agent folders and remap assignment agent ids."""
+    ensure_dirs()
+    renames = {
+        "sql_fetcher": "data-gatherer",
+        "response_builder": "result-builder",
+        "sql": "data-gatherer",
+        "response_publisher": "result-builder",
+    }
+    for old_id, new_id in renames.items():
+        old_instr = instructions_dir() / f"{old_id}.md"
+        new_instr = instructions_dir() / f"{new_id}.md"
+        if old_instr.exists() and not new_instr.exists():
+            old_instr.rename(new_instr)
+        old_skills = skills_dir() / old_id
+        new_skills = skills_dir() / new_id
+        if old_skills.is_dir() and not new_skills.exists():
+            old_skills.rename(new_skills)
+
+    for path, save_fn, load_fn in (
+        (assignments_path(), save_assignments, load_assignments),
+        (skill_assignments_path(), save_skill_assignments, load_skill_assignments),
+    ):
+        if not path.exists():
+            continue
+        raw = json.loads(path.read_text(encoding="utf-8") or "{}")
+        if not isinstance(raw, dict):
+            continue
+        changed = False
+        next_map: dict[str, list[str]] = {}
+        for key, agents in raw.items():
+            new_key = str(key)
+            for old_id, new_id in renames.items():
+                new_key = new_key.replace(f"{old_id}/", f"{new_id}/")
+            mapped = [
+                renames.get(str(a), str(a))
+                for a in (agents if isinstance(agents, list) else [])
+            ]
+            if mapped != agents or new_key != key:
+                changed = True
+            next_map[new_key] = mapped
+        if changed:
+            save_fn(next_map)
+
+
+def sync_pipeline_agents_from_source() -> None:
+    """Refresh seed rules, skills, instructions, and assignments from analytics/agents."""
+    ensure_dirs()
+    migrate_pipeline_agent_ids()
+    agents_root = _agents_source_dir()
+
+    for agent_id in AGENT_IDS:
+        agent_md = agents_root / agent_id / "AGENT.md"
+        if agent_md.is_file():
+            (instructions_dir() / f"{agent_id}.md").write_text(
+                agent_md.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+
+    shared_rules = agents_root / "_shared" / "rules"
+    if shared_rules.is_dir():
+        for rule_file in sorted(shared_rules.glob("*.md")):
+            stem = _strip_numeric_prefix(rule_file.stem)
+            name = RULE_DISPLAY_NAMES.get(stem) or _humanize_id(stem)
+            (rules_dir() / f"{stem}.md").write_text(
+                _set_md_meta(rule_file.read_text(encoding="utf-8"), name=name),
+                encoding="utf-8",
+            )
+
+    for agent_id in AGENT_IDS:
+        rules_folder = agents_root / agent_id / "rules"
+        if not rules_folder.is_dir():
+            continue
+        for rule_file in sorted(rules_folder.glob("*.md")):
+            stem = _strip_numeric_prefix(rule_file.stem)
+            name = RULE_DISPLAY_NAMES.get(stem) or _humanize_id(stem)
+            (rules_dir() / f"{stem}.md").write_text(
+                _set_md_meta(rule_file.read_text(encoding="utf-8"), name=name),
+                encoding="utf-8",
+            )
+
+    shared_src = agents_root / "_shared" / "skills"
+    if shared_src.is_dir():
+        for skill_folder in sorted(shared_src.iterdir()):
+            skill_md = skill_folder / "SKILL.md"
+            if skill_folder.is_dir() and skill_md.exists():
+                dest_dir = skills_dir() / "shared" / skill_folder.name
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                (dest_dir / "SKILL.md").write_text(
+                    _set_md_meta(
+                        skill_md.read_text(encoding="utf-8"),
+                        name=SKILL_DISPLAY_NAMES.get(skill_folder.name)
+                        or _humanize_id(skill_folder.name),
+                    ),
+                    encoding="utf-8",
+                )
+
+    for agent_id in AGENT_IDS:
+        agent_skills = agents_root / agent_id / "skills"
+        if not agent_skills.is_dir():
+            continue
+        dest_agent = skills_dir() / agent_id
+        dest_agent.mkdir(parents=True, exist_ok=True)
+        for skill_folder in sorted(agent_skills.iterdir()):
+            skill_md = skill_folder / "SKILL.md"
+            if skill_folder.is_dir() and skill_md.exists():
+                dest_dir = dest_agent / skill_folder.name
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                (dest_dir / "SKILL.md").write_text(
+                    _set_md_meta(
+                        skill_md.read_text(encoding="utf-8"),
+                        name=SKILL_DISPLAY_NAMES.get(skill_folder.name)
+                        or _humanize_id(skill_folder.name),
+                    ),
+                    encoding="utf-8",
+                )
+
+    save_assignments(default_rule_assignments())
+    save_skill_assignments(default_skill_assignments())
+
+
 def migrate_sql_agent_id() -> None:
     """Rename leftover sql_guardian skill folders and assignment ids."""
     ensure_dirs()
@@ -704,14 +846,18 @@ def list_agents_with_instructions() -> list[dict]:
 
 def assemble_agent_prompt(agent_id: str) -> str:
     """Build the runtime prompt from the agent meta plus assigned rules and skills."""
+    from .agents import resolve_agent_definition_id
     from .config_loader import get_agent_meta
+    from .db_dialects import list_tables
+    from .docs_catalog import filter_tables_reference, format_live_catalog_for_prompt
 
+    definition_id = resolve_agent_definition_id(agent_id)
     try:
-        meta = get_agent_meta(agent_id)
+        meta = get_agent_meta(definition_id)
     except KeyError:
-        meta = {"id": agent_id, "name": agent_id, "description": ""}
+        meta = {"id": definition_id, "name": definition_id, "description": ""}
     parts = [
-        f"# {meta.get('name') or agent_id}",
+        f"# {meta.get('name') or definition_id}",
         "",
         str(meta.get("description") or "").strip(),
         "",
@@ -721,7 +867,7 @@ def assemble_agent_prompt(agent_id: str) -> str:
     for rule in list_rules():
         if rule.get("disabled"):
             continue
-        if agent_id not in (rule.get("agents") or []):
+        if definition_id not in (rule.get("agents") or []):
             continue
         parts.append(f"### {rule.get('name') or rule.get('id')}")
         parts.append(rule.get("content") or "")
@@ -731,18 +877,45 @@ def assemble_agent_prompt(agent_id: str) -> str:
     for skill in list_skills():
         if skill.get("disabled"):
             continue
-        if agent_id not in (skill.get("agents") or []):
+        if definition_id not in (skill.get("agents") or []):
             continue
         parts.append(f"### {skill.get('name') or skill.get('id')}")
         parts.append(skill.get("content") or "")
         parts.append("")
-    parts.append("## Warehouse catalog")
-    parts.append("")
+    live_full_names: set[str] = set()
     try:
-        parts.append(get_reference("tables").get("content") or "")
+        for item in list_tables():
+            full = str(item.get("full_name") or "").strip()
+            if not full:
+                schema = str(item.get("schema") or "").strip()
+                table = str(item.get("name") or item.get("table") or "").strip()
+                full = f"{schema}.{table}" if schema and table else table
+            if full:
+                live_full_names.add(full)
+    except Exception:
+        live_full_names = set()
+
+    parts.append("## References")
+    parts.append("")
+    for ref in list_references():
+        name = ref.get("name") or ""
+        content = ref.get("content") or ""
+        if not content:
+            continue
+        if name == "tables" and live_full_names:
+            content = filter_tables_reference(content, live_full_names)
+        parts.append(f"### {name}")
+        parts.append(content)
         parts.append("")
-    except FileNotFoundError:
-        pass
+    parts.append("## Live catalog")
+    parts.append("")
+    parts.append(
+        "Introspected from the connected database. Prefer these objects and columns "
+        "over static docs when they differ."
+    )
+    parts.append("")
+    parts.append(format_live_catalog_for_prompt())
+    parts.append("")
     return "\n".join(parts).strip() + "\n"
 
 def get_instruction(agent_id: str) -> str:

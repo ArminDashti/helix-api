@@ -1,34 +1,25 @@
 {
-  "shared/understand-database": [
-    "guardian",
-    "sql_fetcher",
-    "validator"
-  ],
-  "shared/generate-grid": [
-    "response_builder"
-  ],
-  "shared/generate-analytical-report": [
-    "response_builder"
-  ],
-  "shared/text-report": [
-    "response_builder"
-  ],
-  "shared/echarts-response": [
-    "response_builder"
-  ],
-  "shared/sql-safety": [
-    "sql_fetcher"
-  ],
   "guardian/guard-prompt": [
     "guardian"
   ],
-  "sql_fetcher/review-sql-statements": [
-    "sql_fetcher"
+  "shared/understand-database": [
+    "guardian",
+    "data-gatherer",
+    "validator"
   ],
-  "response_builder/package-ui-payload": [
-    "response_builder"
+  "data-gatherer/gather-data": [
+    "data-gatherer"
   ],
   "validator/match-prompt-goal": [
     "validator"
+  ],
+  "shared/generate-analytical-report": [
+    "result-builder"
+  ],
+  "result-builder/build-result": [
+    "result-builder"
+  ],
+  "publisher/publish-result": [
+    "publisher"
   ]
 }

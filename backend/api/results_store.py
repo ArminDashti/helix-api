@@ -44,6 +44,16 @@ def _save(data: dict[str, Any]) -> None:
     )
 
 
+def _coerce_duration_s(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        if value < 0:
+            return None
+        return round(float(value), 2)
+    return None
+
+
 def _summary(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": item.get("id"),
@@ -52,6 +62,7 @@ def _summary(item: dict[str, Any]) -> dict[str, Any]:
         "mode": item.get("mode") or "",
         "language": item.get("language") or "en",
         "archived": bool(item.get("archived")),
+        "duration_s": _coerce_duration_s(item.get("duration_s")),
     }
 
 
@@ -77,6 +88,7 @@ def create_result(
     mode: str,
     language: str,
     payload: Any,
+    duration_s: Any = None,
 ) -> dict[str, Any]:
     item = {
         "id": uuid.uuid4().hex,
@@ -86,6 +98,7 @@ def create_result(
         "language": language or "en",
         "archived": False,
         "payload": payload,
+        "duration_s": _coerce_duration_s(duration_s),
     }
     with _LOCK:
         data = _load()

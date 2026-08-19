@@ -16,6 +16,7 @@ class ApiConfig(AppConfig):
         markdown_store.seed_if_empty()
         markdown_store.migrate_rule_ids()
         markdown_store.migrate_sql_agent_id()
+        markdown_store.sync_pipeline_agents_from_source()
         markdown_store.seed_skills_if_empty()
         markdown_store.ensure_skill_display_names()
         markdown_store.ensure_default_rule_assignments()

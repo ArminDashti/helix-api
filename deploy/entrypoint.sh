@@ -13,6 +13,6 @@ fi
 exec gunicorn helix.wsgi:application \
   --bind "0.0.0.0:${PORT:-8000}" \
   --workers "${GUNICORN_WORKERS:-2}" \
-  --timeout "${GUNICORN_TIMEOUT:-120}" \
+  --timeout "${GUNICORN_TIMEOUT:-660}" \
   --access-logfile - \
   --error-logfile -

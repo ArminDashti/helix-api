@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from .config_loader import known_agent_ids, load_config, save_config
+from .agents import AGENT_BY_ID, resolve_agent_definition_id
 
 WHEN_TYPES = frozenset({"always", "on_success", "on_failure", "on_retry", "on_status"})
 EDGE_ROLES = frozenset({"then", "else", "loop"})
@@ -17,16 +18,47 @@ FLOW_TYPES = frozenset({"sequence", "agent", "if", "loop", "stages", "stage"})
 STAGE_ACTIONS = frozenset({"if", "if_not", "proceed"})
 RESULT_OPS = frozenset({"equal", "not_equal"})
 THEN_ACTIONS = frozenset({"proceed", "stop"})
+RETRY_AGENT_IDS = frozenset({"data-gatherer", "result-builder", "publisher"})
+
+
+def _graph_node_allowed(node_id: str) -> bool:
+    return resolve_agent_definition_id(node_id) in AGENT_BY_ID
+
+
+def _instance_id(agent_id: str, occurrence: int) -> str:
+    if occurrence <= 1:
+        return agent_id
+    return f"{agent_id}__{occurrence}"
+
+
+def _spine_definition_ids(children: list[dict[str, Any]]) -> list[str]:
+    if not children:
+        return []
+    spine = [str(children[0].get("agent_id") or "").strip()]
+    for stage in children:
+        nxt = str(stage.get("next_agent_id") or "").strip()
+        if nxt and str(stage.get("then") or "proceed").strip().lower() != "stop":
+            spine.append(nxt)
+    return [aid for aid in spine if aid]
+
+
+def _spine_instance_ids(children: list[dict[str, Any]]) -> list[str]:
+    counts: dict[str, int] = {}
+    instances: list[str] = []
+    for aid in _spine_definition_ids(children):
+        counts[aid] = counts.get(aid, 0) + 1
+        instances.append(_instance_id(aid, counts[aid]))
+    return instances
 
 
 def default_pipeline_graph() -> dict[str, Any]:
-    """Guardian → SQL fetcher → Response builder → Validator."""
+    """guardian → data-gatherer → validator → result-builder → validator → publisher."""
     flow = default_pipeline_flow()
     return compile_pipeline_flow(flow)
 
 
 def default_pipeline_flow() -> dict[str, Any]:
-    """Guardian → SQL fetcher → Response builder → Validator (fail retries SQL)."""
+    """Six-step seed: two validator visits with fail-back edges compiled in graph."""
     return {
         "type": "stages",
         "children": [
@@ -35,18 +67,11 @@ def default_pipeline_flow() -> dict[str, Any]:
                 "agent_id": "guardian",
                 "action": "proceed",
                 "then": "proceed",
-                "next_agent_id": "sql_fetcher",
+                "next_agent_id": "data-gatherer",
             },
             {
                 "type": "stage",
-                "agent_id": "sql_fetcher",
-                "action": "proceed",
-                "then": "proceed",
-                "next_agent_id": "response_builder",
-            },
-            {
-                "type": "stage",
-                "agent_id": "response_builder",
+                "agent_id": "data-gatherer",
                 "action": "proceed",
                 "then": "proceed",
                 "next_agent_id": "validator",
@@ -54,11 +79,29 @@ def default_pipeline_flow() -> dict[str, Any]:
             {
                 "type": "stage",
                 "agent_id": "validator",
-                "action": "if",
-                "expected": "fail",
-                "result_op": "equal",
+                "action": "proceed",
                 "then": "proceed",
-                "next_agent_id": "sql_fetcher",
+                "next_agent_id": "result-builder",
+            },
+            {
+                "type": "stage",
+                "agent_id": "result-builder",
+                "action": "proceed",
+                "then": "proceed",
+                "next_agent_id": "validator",
+            },
+            {
+                "type": "stage",
+                "agent_id": "validator",
+                "action": "proceed",
+                "then": "proceed",
+                "next_agent_id": "publisher",
+            },
+            {
+                "type": "stage",
+                "agent_id": "publisher",
+                "action": "proceed",
+                "then": "stop",
             },
         ],
     }
@@ -187,7 +230,7 @@ def normalize_pipeline_graph(payload: dict[str, Any] | None) -> dict[str, Any]:
         node_id = str(entry.get("id") or "").strip()
         if not node_id:
             continue
-        if node_id not in allowed:
+        if node_id not in allowed and not _graph_node_allowed(node_id):
             raise ValueError(f"Unknown agent node: {node_id}")
         if node_id in seen:
             raise ValueError(f"Duplicate node id: {node_id}")
@@ -406,27 +449,33 @@ def _compile_stages(
     positions: dict[str, dict[str, float]],
 ) -> dict[str, Any]:
     children = flow.get("children") or []
-    node_ids: list[str] = []
-    for stage in children:
-        for key in ("agent_id", "next_agent_id"):
-            aid = str(stage.get(key) or "").strip()
-            if aid and aid not in node_ids:
-                node_ids.append(aid)
-    if not node_ids:
+    spine = _spine_instance_ids(children)
+    if not spine:
         raise ValueError("pipeline_flow must include at least one agent")
     nodes = []
     y = 0.0
-    for i, agent_id in enumerate(node_ids):
-        pos = positions.get(agent_id) or {"x": 0.0, "y": y}
+    for i, node_id in enumerate(spine):
+        pos = positions.get(node_id) or positions.get(resolve_agent_definition_id(node_id)) or {
+            "x": 0.0,
+            "y": y,
+        }
         y = max(y, float(pos.get("y", 0)) + 100)
-        nodes.append({"id": agent_id, "position": {"x": float(pos.get("x", 0)), "y": float(pos.get("y", y))}})
+        nodes.append(
+            {
+                "id": node_id,
+                "definition_id": resolve_agent_definition_id(node_id),
+                "position": {"x": float(pos.get("x", 0)), "y": float(pos.get("y", y))},
+            }
+        )
     edges: list[dict[str, Any]] = []
     for i, stage in enumerate(children):
         then_act = str(stage.get("then") or "proceed")
-        target = str(stage.get("next_agent_id") or "").strip()
-        source = str(stage["agent_id"])
-        if then_act == "stop" or not target:
+        target_def = str(stage.get("next_agent_id") or "").strip()
+        source_def = str(stage["agent_id"])
+        if then_act == "stop" or not target_def:
             continue
+        source = spine[i] if i < len(spine) else source_def
+        target = spine[i + 1] if i + 1 < len(spine) else target_def
         action = stage.get("action")
         if action == "proceed":
             when = {"type": "always"}
@@ -450,7 +499,51 @@ def _compile_stages(
                 "limit": DEFAULT_EDGE_LIMIT,
             }
         )
-    return {"entry": node_ids[0], "nodes": nodes, "edges": edges}
+    # Self-retry on producer errors
+    for node_id in spine:
+        def_id = resolve_agent_definition_id(node_id)
+        if def_id in RETRY_AGENT_IDS:
+            edges.append(
+                {
+                    "id": f"e_retry_{node_id}",
+                    "source": node_id,
+                    "target": node_id,
+                    "direction": "back",
+                    "kind": "back",
+                    "when": {"type": "on_failure"},
+                    "limit": DEFAULT_EDGE_LIMIT,
+                }
+            )
+    # Validator fail-back edges
+    validator_instances = [nid for nid in spine if resolve_agent_definition_id(nid) == "validator"]
+    if validator_instances:
+        edges.append(
+            {
+                "id": f"e_val_fail_{validator_instances[0]}",
+                "source": validator_instances[0],
+                "target": next((n for n in spine if resolve_agent_definition_id(n) == "data-gatherer"), "data-gatherer"),
+                "direction": "back",
+                "kind": "result_is",
+                "when": {"type": "on_status", "status": "fail"},
+                "limit": DEFAULT_EDGE_LIMIT,
+            }
+        )
+    if len(validator_instances) > 1:
+        edges.append(
+            {
+                "id": f"e_val_fail_{validator_instances[1]}",
+                "source": validator_instances[1],
+                "target": next(
+                    (n for n in spine if resolve_agent_definition_id(n) == "result-builder"),
+                    "result-builder",
+                ),
+                "direction": "back",
+                "kind": "result_is",
+                "when": {"type": "on_status", "status": "fail"},
+                "limit": DEFAULT_EDGE_LIMIT,
+            }
+        )
+    return {"entry": spine[0], "nodes": nodes, "edges": edges}
 
 
 def _agent_count(block: dict[str, Any] | None) -> int:

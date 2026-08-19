@@ -62,13 +62,16 @@ class PipelineAgentTests(SimpleTestCase):
                 self.assertNotIn(victim, ids_after)
 
 
-class FourAgentPipelineTests(SimpleTestCase):
-    def test_default_flow_uses_four_agents(self):
+class SixAgentPipelineTests(SimpleTestCase):
+    def test_default_flow_uses_six_steps(self):
         from .pipeline_graph import compile_pipeline_flow, default_pipeline_flow
 
         graph = compile_pipeline_flow(default_pipeline_flow())
         self.assertEqual(graph["entry"], "guardian")
-        self.assertEqual({node["id"] for node in graph["nodes"]}, set(AGENT_IDS))
+        node_ids = [node["id"] for node in graph["nodes"]]
+        self.assertEqual(len(node_ids), 6)
+        self.assertIn("validator__2", node_ids)
+        self.assertIn("publisher", node_ids)
 
     def test_guardian_blocks_write_prompt(self):
         from .pipeline_run import _guardian_hard_block
@@ -88,6 +91,172 @@ class FourAgentPipelineTests(SimpleTestCase):
                 {"username": "guest", "is_admin": False, "is_guest": True},
             )
         )
+
+    def test_data_gatherer_sql_error_returns_failed_not_raise(self):
+        from . import markdown_store as store
+        from .pipeline_run import _run_agent
+
+        ctx = {
+            "prompt": "top products",
+            "mode": "grid",
+            "language": "en",
+            "actor": {"username": "armin", "is_admin": True},
+            "artifacts": {},
+        }
+        with patch("api.pipeline_run.complete_chat") as chat:
+            chat.return_value = '{"result":"done","sql":"SELECT 1","message":"ok"}'
+            with patch("api.pipeline_run.execute_select") as exe:
+                exe.side_effect = ValueError("Invalid object name")
+                with patch.object(store, "assemble_agent_prompt", return_value="system"):
+                    status, message = _run_agent("data-gatherer", ctx)
+        self.assertEqual(status, "failed")
+        self.assertIn("Invalid object name", message)
+
+    def test_jalali_tir_1405_gregorian_bounds(self):
+        from .jalali_dates import calendar_hint_for_prompt, jalali_to_gregorian
+
+        gy, gm, gd = jalali_to_gregorian(1405, 4, 1)
+        self.assertEqual((gy, gm, gd), (2026, 6, 22))
+        hint = calendar_hint_for_prompt(
+            "میزان فروش پر فروش ترین کالای مرکز کرمان در تیر 1405"
+        )
+        self.assertIn("Sal = 1405", hint)
+        self.assertIn("TarikhFaktor >= '2026-06-22'", hint)
+        self.assertIn("TarikhFaktor < '2026-07-23'", hint)
+        self.assertIn("YEAR(TarikhFaktor) = 1405", hint)
+        self.assertIn("N'کرمان'", hint)
+
+    def test_data_gatherer_prompt_includes_calendar_hint(self):
+        from . import markdown_store as store
+        from .pipeline_run import _run_agent
+
+        ctx = {
+            "prompt": "تیر 1405 کرمان",
+            "mode": "grid",
+            "language": "fa",
+            "actor": {"username": "armin", "is_admin": True},
+            "artifacts": {},
+        }
+        with patch("api.pipeline_run.complete_chat") as chat:
+            chat.return_value = '{"result":"done","sql":"SELECT TOP 1 1 AS n","message":"ok"}'
+            with patch("api.pipeline_run.execute_select") as exe:
+                exe.return_value = {"sql": "SELECT TOP 1 1 AS n", "columns": ["n"], "rows": [{"n": 1}]}
+                with patch.object(store, "assemble_agent_prompt", return_value="system"):
+                    status, _message = _run_agent("data-gatherer", ctx)
+        self.assertEqual(status, "done")
+        user = chat.call_args[0][1]
+        self.assertIn("TarikhFaktor >= '2026-06-22'", user)
+
+    def test_first_validator_fail_edge_targets_data_gatherer(self):
+        from .pipeline_graph import compile_pipeline_flow, default_pipeline_flow, next_edge
+
+        graph = compile_pipeline_flow(default_pipeline_flow())
+        edge = next_edge(graph, "validator", "fail", {})
+        self.assertIsNotNone(edge)
+        self.assertEqual(edge["target"], "data-gatherer")
+
+    def test_second_validator_fail_edge_targets_result_builder(self):
+        from .pipeline_graph import compile_pipeline_flow, default_pipeline_flow, next_edge
+
+        graph = compile_pipeline_flow(default_pipeline_flow())
+        edge = next_edge(graph, "validator__2", "fail", {})
+        self.assertIsNotNone(edge)
+        self.assertEqual(edge["target"], "result-builder")
+
+    def test_prepare_data_gatherer_retry_resets_validator_state(self):
+        from .pipeline_run import _prepare_data_gatherer_retry
+
+        ctx = {
+            "validator_visit": 1,
+            "sql_fetch": {"sql": "SELECT 1", "rows": []},
+            "last_error": "wrong table",
+        }
+        _prepare_data_gatherer_retry(ctx)
+        self.assertEqual(ctx["validator_visit"], 0)
+        self.assertNotIn("sql_fetch", ctx)
+
+    def test_validator_after_retry_uses_first_visit_prompt(self):
+        from . import markdown_store as store
+        from .pipeline_run import _prepare_data_gatherer_retry, _run_agent
+
+        ctx = {
+            "prompt": "top products",
+            "mode": "grid",
+            "language": "en",
+            "actor": {"username": "armin", "is_admin": True},
+            "artifacts": {"validator": {"message": "wrong grain"}},
+            "validator_visit": 1,
+            "last_error": "wrong grain",
+        }
+        _prepare_data_gatherer_retry(ctx)
+        captured: list[str] = []
+
+        def fake_chat(agent_id, user, system):
+            captured.append(user)
+            return '{"result":"pass","message":"ok"}'
+
+        with patch("api.pipeline_run.complete_chat", side_effect=fake_chat):
+            with patch.object(store, "assemble_agent_prompt", return_value="system"):
+                status, _ = _run_agent("validator", ctx)
+        self.assertEqual(status, "pass")
+        self.assertEqual(ctx["validator_visit"], 1)
+        self.assertTrue(captured)
+        self.assertIn("first validator visit", captured[0].lower())
+        self.assertNotIn("second validator visit", captured[0].lower())
+
+    def test_assemble_prompt_includes_references_section(self):
+        from . import markdown_store as store
+
+        with patch.object(store, "list_references") as refs:
+            refs.return_value = [
+                {"name": "tables", "content": "# tables"},
+                {"name": "base-instruction", "content": "# base"},
+            ]
+            with patch("api.db_dialects.list_tables", return_value=[{"schema": "Sales", "name": "Moshtary", "full_name": "Sales.Moshtary"}]):
+                with patch.object(store, "list_rules", return_value=[]):
+                    with patch.object(store, "list_skills", return_value=[]):
+                        with patch(
+                            "api.docs_catalog.format_live_catalog_for_prompt",
+                            return_value="### Sales.Moshtary\nColumns: ccMoshtary, NameMoshtary",
+                        ):
+                            prompt = store.assemble_agent_prompt("guardian")
+        self.assertIn("## References", prompt)
+        self.assertIn("base-instruction", prompt)
+        self.assertIn("## Live catalog", prompt)
+        self.assertIn("NameMoshtary", prompt)
+
+
+class DocsCatalogPromptTests(SimpleTestCase):
+    def test_filter_tables_reference_keeps_matching_sections_only(self):
+        from .docs_catalog import filter_tables_reference
+
+        md = (
+            "# Generic\n\n"
+            "## Sales.Moshtary\n\n| Column | Description |\n| ccMoshtary | id |\n\n"
+            "## Missing.Table\n\n| Column | Description |\n| x | y |\n"
+        )
+        filtered = filter_tables_reference(md, {"Sales.Moshtary"})
+        self.assertIn("Sales.Moshtary", filtered)
+        self.assertNotIn("Missing.Table", filtered)
+
+    def test_format_live_catalog_lists_columns(self):
+        from . import docs_catalog
+
+        with patch.object(
+            docs_catalog.db_sql,
+            "list_tables",
+            return_value=[{"schema": "SalesLT", "name": "Product", "full_name": "SalesLT.Product"}],
+        ):
+            with patch.object(
+                docs_catalog.db_sql,
+                "list_columns",
+                return_value=[{"name": "ProductID"}, {"name": "Name"}],
+            ):
+                with patch.object(docs_catalog, "_docs_markdown", return_value=""):
+                    text = docs_catalog.format_live_catalog_for_prompt(max_tables=5)
+        self.assertIn("SalesLT.Product", text)
+        self.assertIn("ProductID", text)
+        self.assertIn("Name", text)
 
 
 class LlmSettingsTests(SimpleTestCase):
@@ -140,6 +309,27 @@ class LlmSettingsTests(SimpleTestCase):
                 ):
                     self.assertEqual(
                         get_llm_base_url(), "http://127.0.0.1:8140/v1"
+                    )
+
+    def test_unresolvable_container_hostname_falls_back_to_localhost(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "helix.config.yaml"
+            with override_settings(HELIX_CONFIG_PATH=str(config_path)):
+                save_config(
+                    {
+                        "provider": "openai_compatible",
+                        "openrouter": {
+                            "base_url": "http://cursor-openai-adapter-api:8140/v1"
+                        },
+                    }
+                )
+                with patch(
+                    "api.config_loader.socket.getaddrinfo",
+                    side_effect=OSError(11001, "getaddrinfo failed"),
+                ):
+                    self.assertEqual(
+                        get_llm_base_url(),
+                        "http://127.0.0.1:8140/v1",
                     )
 
 
@@ -313,4 +503,38 @@ class SqlExecuteTests(SimpleTestCase):
         self.assertIn("SQL Server closed the connection", str(raised.exception))
         self.assertIsNone(raised.exception.__cause__)
         self.assertNotIn("exception set", str(raised.exception).lower())
+
+
+class ResultsStoreTests(SimpleTestCase):
+    def test_create_result_persists_duration_in_list_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with override_settings(MARKDOWN_FILES_DIR=tmp):
+                from . import results_store
+
+                item = results_store.create_result(
+                    prompt="top products",
+                    mode="grid",
+                    language="en",
+                    payload={"grid": {"columns": [], "rows": []}},
+                    duration_s=12.44,
+                )
+                self.assertEqual(item["duration_s"], 12.44)
+                listed = results_store.list_results()
+                self.assertEqual(listed[0]["duration_s"], 12.44)
+
+    def test_create_result_ignores_invalid_duration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with override_settings(MARKDOWN_FILES_DIR=tmp):
+                from . import results_store
+
+                item = results_store.create_result(
+                    prompt="no duration",
+                    mode="grid",
+                    language="en",
+                    payload={},
+                    duration_s="slow",
+                )
+                self.assertIsNone(item["duration_s"])
+                listed = results_store.list_results()
+                self.assertIsNone(listed[0]["duration_s"])
 

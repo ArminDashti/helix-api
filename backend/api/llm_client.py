@@ -10,6 +10,7 @@ from typing import Any
 import socket
 
 from .config_loader import (
+    DEFAULT_LLM_MODEL,
     get_agent_model,
     get_llm_base_url,
     get_llm_timeout_seconds,
@@ -18,8 +19,8 @@ from .config_loader import (
     get_provider,
 )
 
-_OPENROUTER_AUTO_MODEL = "openai/gpt-4o-mini"
-_OPENAI_COMPAT_AUTO_MODEL = "gpt-4o-mini"
+_OPENROUTER_AUTO_MODEL = DEFAULT_LLM_MODEL
+_OPENAI_COMPAT_AUTO_MODEL = DEFAULT_LLM_MODEL
 
 
 def require_llm() -> tuple[str, str, str]:
@@ -53,11 +54,15 @@ def _complete_via_chat_completions(
 
     model = get_agent_model(agent_id)
     if not model or model == "auto":
-        model = (
-            _OPENROUTER_AUTO_MODEL
-            if provider == "openrouter"
-            else _OPENAI_COMPAT_AUTO_MODEL
-        )
+        if provider == "openrouter":
+            model = _OPENROUTER_AUTO_MODEL
+        else:
+            default = str(get_openrouter_settings().get("default_model") or "").strip()
+            model = (
+                default
+                if default and default != "auto"
+                else _OPENAI_COMPAT_AUTO_MODEL
+            )
 
     body = json.dumps(
         {

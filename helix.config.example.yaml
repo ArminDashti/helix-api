@@ -14,34 +14,38 @@ openrouter:
   token_env: OPENROUTER_TOKEN
   base_url: "https://openrouter.ai/api/v1"
   app_name: "Helix"
-  default_model: "auto"
+  default_model: "composer-2.5"
   # Per chat/completions call; pipeline agents can exceed 90s with large prompts.
   timeout_seconds: 600
   agents:
     guardian:
-      model: "auto"
-    sql_fetcher:
-      model: "auto"
-    response_builder:
-      model: "auto"
+      model: "composer-2.5"
+    data-gatherer:
+      model: "composer-2.5"
     validator:
-      model: "auto"
+      model: "composer-2.5"
+    result-builder:
+      model: "composer-2.5"
+    publisher:
+      model: "composer-2.5"
 
 
 # Unused leftover section (Settings no longer edits this). Chat uses openrouter.* only.
 cursor:
   token_env: CURSOR_API_KEY
   app_name: "Helix"
-  default_model: "auto"
+  default_model: "composer-2.5"
   agents:
     guardian:
-      model: "auto"
-    sql_fetcher:
-      model: "auto"
-    response_builder:
-      model: "auto"
+      model: "composer-2.5"
+    data-gatherer:
+      model: "composer-2.5"
     validator:
-      model: "auto"
+      model: "composer-2.5"
+    result-builder:
+      model: "composer-2.5"
+    publisher:
+      model: "composer-2.5"
 app:
   secret_key: "change-me"
   debug: true

@@ -10,6 +10,7 @@ import socket
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,7 @@ from .agents import (
     is_builtin_agent,
 )
 
-AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 TOKEN_ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_OPENROUTER_TOKEN_ENV = "OPENROUTER_TOKEN"
 DEFAULT_CURSOR_TOKEN_ENV = "CURSOR_API_KEY"
@@ -48,32 +49,36 @@ DEFAULT_DATABASE = {
     "path": "",
 }
 
+DEFAULT_LLM_MODEL = "composer-2.5"
+
 DEFAULT_AGENT_MODELS = {
-    "guardian": "auto",
-    "sql_fetcher": "auto",
-    "response_builder": "auto",
-    "validator": "auto",
+    "guardian": DEFAULT_LLM_MODEL,
+    "data-gatherer": DEFAULT_LLM_MODEL,
+    "validator": DEFAULT_LLM_MODEL,
+    "result-builder": DEFAULT_LLM_MODEL,
+    "publisher": DEFAULT_LLM_MODEL,
 }
 
 DEFAULT_CURSOR_AGENT_MODELS = {
-    "guardian": "auto",
-    "sql_fetcher": "auto",
-    "response_builder": "auto",
-    "validator": "auto",
+    "guardian": DEFAULT_LLM_MODEL,
+    "data-gatherer": DEFAULT_LLM_MODEL,
+    "validator": DEFAULT_LLM_MODEL,
+    "result-builder": DEFAULT_LLM_MODEL,
+    "publisher": DEFAULT_LLM_MODEL,
 }
 
 DEFAULT_OPENROUTER = {
     "token_env": DEFAULT_OPENROUTER_TOKEN_ENV,
     "base_url": DEFAULT_OPENROUTER_BASE_URL,
     "app_name": "Helix",
-    "default_model": "auto",
+    "default_model": DEFAULT_LLM_MODEL,
     "agents": {agent_id: {"model": model} for agent_id, model in DEFAULT_AGENT_MODELS.items()},
 }
 
 DEFAULT_CURSOR = {
     "token_env": DEFAULT_CURSOR_TOKEN_ENV,
     "app_name": "Helix",
-    "default_model": "auto",
+    "default_model": DEFAULT_LLM_MODEL,
     "agents": {
         agent_id: {"model": model} for agent_id, model in DEFAULT_CURSOR_AGENT_MODELS.items()
     },
@@ -497,16 +502,27 @@ def _normalize_base_url(raw: Any) -> str:
     return str(raw or "").strip().rstrip("/")
 
 
-def _rewrite_unresolvable_docker_hostname(base_url: str) -> str:
-    """Use loopback when host.docker.internal does not resolve (API not in Docker)."""
-    docker_hostname = "host.docker.internal"
-    if docker_hostname not in base_url:
+def _rewrite_unresolvable_hostname_to_localhost(base_url: str) -> str:
+    """
+    Rewrite an unresolvable LLM hostname to localhost.
+
+    Why: config may point at a container hostname (e.g. `cursor-openai-adapter-api`)
+    which is only resolvable from inside Docker. When running on the host, DNS
+    will fail, and the pipeline should fall back to `127.0.0.1`.
+    """
+    parsed = urlparse(base_url)
+    hostname = parsed.hostname
+    if not hostname:
         return base_url
+
     try:
-        socket.getaddrinfo(docker_hostname, None)
+        socket.getaddrinfo(hostname, None)
+        return base_url
     except OSError:
-        return base_url.replace(docker_hostname, "127.0.0.1")
-    return base_url
+        netloc = "127.0.0.1"
+        if parsed.port:
+            netloc = f"127.0.0.1:{parsed.port}"
+        return parsed._replace(netloc=netloc).geturl()
 
 
 def get_llm_base_url() -> str:
@@ -515,7 +531,9 @@ def get_llm_base_url() -> str:
     raw = data.get("openrouter") or {}
     if not isinstance(raw, dict):
         raw = {}
-    stored = _rewrite_unresolvable_docker_hostname(_normalize_base_url(raw.get("base_url")))
+    stored = _rewrite_unresolvable_hostname_to_localhost(
+        _normalize_base_url(raw.get("base_url"))
+    )
     if stored:
         return stored
     if get_provider() == "openrouter":
@@ -780,13 +798,11 @@ def get_custom_agents() -> list[dict[str, str]]:
         seen.add(agent_id)
         name = str(entry.get("name") or "").strip() or agent_id
         description = str(entry.get("description") or "").strip()
-        human_name = str(entry.get("human_name") or "").strip()
         agents.append(
             {
                 "id": agent_id,
                 "name": name,
                 "description": description,
-                "human_name": human_name,
                 "builtin": agent_id in AGENT_BY_ID,
                 "disabled": bool(entry.get("disabled")),
             }
@@ -801,8 +817,6 @@ def _apply_agent_profile(meta: dict[str, Any], profiles: dict[str, Any]) -> dict
         return item
     if profile.get("name"):
         item["name"] = str(profile["name"]).strip()
-    if "human_name" in profile:
-        item["human_name"] = str(profile.get("human_name") or "").strip()
     if "description" in profile:
         item["description"] = str(profile.get("description") or "").strip()
     return item
@@ -833,7 +847,7 @@ def get_all_agent_metas() -> list[dict[str, Any]]:
         base = {**meta, "builtin": True, "disabled": meta["id"] in disabled}
         custom = custom_by_id.get(meta["id"])
         if custom:
-            for key in ("name", "description", "human_name", "disabled"):
+            for key in ("name", "description", "disabled"):
                 if custom.get(key) not in (None, ""):
                     base[key] = custom[key]
             base["disabled"] = bool(custom.get("disabled")) if "disabled" in custom else base["disabled"]
@@ -894,30 +908,24 @@ def known_agent_ids() -> set[str]:
 
 
 def get_agent_meta(agent_id: str) -> dict[str, Any]:
+    from .agents import resolve_agent_definition_id
+
+    definition_id = resolve_agent_definition_id(agent_id)
     for meta in get_all_agent_metas():
-        if meta["id"] == agent_id:
+        if meta["id"] == definition_id:
             return dict(meta)
     raise KeyError(f"Unknown agent: {agent_id}")
-
-
-def _clean_human_name(raw: Any) -> str:
-    cleaned = str(raw or "").strip()
-    if len(cleaned) > 80:
-        raise ValueError("human_name must be at most 80 characters")
-    return cleaned
 
 
 def create_custom_agent(
     agent_id: str,
     name: str,
     description: str = "",
-    *,
-    human_name: str = "",
 ) -> dict[str, Any]:
     cleaned_id = (agent_id or "").strip()
     if not AGENT_ID_RE.match(cleaned_id):
         raise ValueError(
-            "id must be lowercase letters, digits, or underscores, starting with a letter"
+            "id must be lowercase letters, digits, underscores, or hyphens, starting with a letter"
         )
     data = load_config()
     deleted = get_deleted_agent_ids()
@@ -929,7 +937,6 @@ def create_custom_agent(
             return update_agent_fields(
                 cleaned_id,
                 name=name,
-                human_name=human_name,
                 description=description,
             )
     if cleaned_id in known_agent_ids():
@@ -942,7 +949,6 @@ def create_custom_agent(
     cleaned_description = (description or "").strip()
     if len(cleaned_description) > 500:
         raise ValueError("description must be at most 500 characters")
-    cleaned_human = _clean_human_name(human_name)
 
     data = load_config()
     custom = data.get("custom_agents")
@@ -953,7 +959,6 @@ def create_custom_agent(
             "id": cleaned_id,
             "name": cleaned_name,
             "description": cleaned_description,
-            "human_name": cleaned_human,
         }
     )
     data["custom_agents"] = custom
@@ -970,7 +975,6 @@ def create_custom_agent(
         "id": cleaned_id,
         "name": cleaned_name,
         "description": cleaned_description,
-        "human_name": cleaned_human,
         "builtin": False,
     }
 
@@ -1089,7 +1093,6 @@ def update_agent_fields(
     agent_id: str,
     *,
     name: str | None = None,
-    human_name: str | None = None,
     description: str | None = None,
 ) -> dict[str, Any]:
     if agent_id not in known_agent_ids():
@@ -1104,8 +1107,6 @@ def update_agent_fields(
         profiles = data.get("agent_profiles") if isinstance(data.get("agent_profiles"), dict) else {}
         profile = dict(profiles.get(agent_id) or {}) if isinstance(profiles.get(agent_id), dict) else {}
 
-    if human_name is not None:
-        profile["human_name"] = _clean_human_name(human_name)
     if description is not None:
         cleaned_description = str(description).strip()
         if len(cleaned_description) > 500:
@@ -1117,8 +1118,6 @@ def update_agent_fields(
         if isinstance(custom, list):
             for entry in custom:
                 if isinstance(entry, dict) and str(entry.get("id") or "").strip() == agent_id:
-                    if "human_name" in profile:
-                        entry["human_name"] = profile["human_name"]
                     if "description" in profile:
                         entry["description"] = profile["description"]
                     break
@@ -1132,16 +1131,16 @@ def update_agent_fields(
 
 
 def agent_company_label(agent_id: str) -> str:
+    from .agents import resolve_agent_definition_id
+
+    definition_id = resolve_agent_definition_id(agent_id)
     try:
-        meta = get_agent_meta(agent_id)
+        meta = get_agent_meta(definition_id)
     except KeyError:
-        return agent_id.replace("_", " ").title()
+        return agent_id
     names = get_agent_display_names()
-    role = names.get(agent_id, meta.get("name") or agent_id)
-    human = str(meta.get("human_name") or "").strip()
-    if human and role:
-        return f"{human} — {role}"
-    return human or str(role)
+    role = names.get(definition_id, meta.get("name") or definition_id)
+    return str(role or agent_id).strip()
 
 
 _CURSOR_MODELS_CACHE: dict[str, Any] = {"fetched_at": 0.0, "models": []}
@@ -1348,7 +1347,9 @@ def get_agent_model(agent_id: str) -> str:
     entry = agents.get(agent_id)
     if isinstance(entry, dict):
         model = str(entry.get("model") or "").strip()
-        if model:
+        if model and model != "auto":
             return model
     default = str(settings.get("default_model") or "").strip()
-    return default or "auto"
+    if default and default != "auto":
+        return default
+    return DEFAULT_LLM_MODEL

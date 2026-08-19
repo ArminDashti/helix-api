@@ -287,6 +287,136 @@ def _ensure_table_section(md: str, heading: str, key: str) -> tuple[str, int, in
     return md, start, end
 
 
+_GENERIC_TABLE_SECTIONS = frozenset({"catalog", "allowed objects"})
+
+
+def filter_tables_reference(md: str, live_full_names: set[str]) -> str:
+    """Keep generic preamble and documented table sections that exist in the live database."""
+    text = (md or "").strip()
+    if not text:
+        return text
+    matches = list(TABLE_SECTION_RE.finditer(text))
+    if not matches:
+        return text
+    live_lower = {name.strip().lower() for name in live_full_names if name and str(name).strip()}
+    preamble = text[: matches[0].start()].rstrip()
+    kept: list[str] = []
+    for i, match in enumerate(matches):
+        title = match.group("title").strip()
+        start = match.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        block = text[start:end].rstrip()
+        title_lower = title.lower()
+        if title_lower in _GENERIC_TABLE_SECTIONS:
+            kept.append(block)
+            continue
+        if title_lower in live_lower:
+            kept.append(block)
+    if not kept:
+        return preamble + "\n"
+    parts = [preamble] if preamble else []
+    parts.extend(kept)
+    return "\n".join(parts).strip() + "\n"
+
+
+def format_live_catalog_for_prompt(
+    *,
+    max_tables: int = 60,
+    max_columns_per_table: int = 48,
+) -> str:
+    """Introspect the connected database for agent prompts (any engine)."""
+    try:
+        live_tables = db_sql.list_tables()
+    except Exception as exc:  # noqa: BLE001
+        return f"(catalog unavailable: {exc})"
+
+    if not live_tables:
+        return "(empty)"
+
+    docs = _parse_docs_sections(_docs_markdown())
+    documented: list[dict[str, Any]] = []
+    other: list[dict[str, Any]] = []
+    for item in live_tables:
+        full_name = str(item.get("full_name") or "").strip()
+        if not full_name:
+            schema = str(item.get("schema") or "").strip()
+            name = str(item.get("name") or item.get("table") or "").strip()
+            full_name = f"{schema}.{name}" if schema and name else name
+        if full_name.lower() in docs:
+            documented.append({**item, "full_name": full_name})
+        else:
+            other.append({**item, "full_name": full_name})
+
+    selected = documented[:max_tables]
+    remaining = max(0, max_tables - len(selected))
+    if remaining:
+        selected.extend(other[:remaining])
+
+    lines: list[str] = []
+    for item in selected:
+        schema = str(item.get("schema") or "").strip()
+        name = str(item.get("name") or item.get("table") or "").strip()
+        full_name = str(item.get("full_name") or "").strip()
+        if not full_name:
+            full_name = f"{schema}.{name}" if schema and name else name
+        doc = docs.get(full_name.lower()) or {}
+        lines.append(f"### {full_name}")
+        overview = (doc.get("overview") or "").strip()
+        if overview:
+            lines.append(overview)
+
+        live_columns: list[dict[str, Any]] = []
+        if schema and name:
+            try:
+                live_columns = db_sql.list_columns(schema, name)
+            except Exception:
+                live_columns = []
+
+        if live_columns:
+            shown = live_columns[:max_columns_per_table]
+            doc_col_descs = doc.get("columns") or {}
+            for col in shown:
+                col_name = str(col.get("name") or "")
+                col_type = str(col.get("data_type") or "")
+                # prefer SQL extended-property description, fall back to markdown doc
+                col_desc = (col.get("description") or "").strip()
+                if not col_desc:
+                    col_desc = (
+                        doc_col_descs.get(col_name)
+                        or doc_col_descs.get(col_name.lower())
+                        or ""
+                    ).strip()
+                parts = [f"  - {col_name}"]
+                if col_type:
+                    parts.append(f"({col_type})")
+                if col_desc:
+                    parts.append(f"— {col_desc}")
+                lines.append(" ".join(parts))
+            if len(live_columns) > max_columns_per_table:
+                lines.append(
+                    f"  (+ {len(live_columns) - max_columns_per_table} more columns)"
+                )
+        else:
+            # fall back to markdown-only column names
+            doc_col_names = list(doc.get("columns") or {})
+            if doc_col_names:
+                doc_col_descs = doc.get("columns") or {}
+                shown_names = doc_col_names[:max_columns_per_table]
+                for col_name in shown_names:
+                    col_desc = (doc_col_descs.get(col_name) or "").strip()
+                    entry = f"  - {col_name}"
+                    if col_desc:
+                        entry += f" — {col_desc}"
+                    lines.append(entry)
+                if len(doc_col_names) > max_columns_per_table:
+                    lines.append(
+                        f"  (+ {len(doc_col_names) - max_columns_per_table} more columns)"
+                    )
+        lines.append("")
+
+    return "\n".join(lines).strip() or "(empty)"
+
+
 def update_column_docs(
     table: str,
     column: str,

@@ -10,13 +10,19 @@ Agents are **arranged and executed** (Markdown + `helix.config.example.yaml` mod
 
 | Path | Purpose |
 |------|---------|
-| `_shared/rules/` | Army-wide policies (filename sort = priority) |
+| `_shared/rules/` | Army-wide policies: core-behavior, output-contract |
 | `_shared/skills/` | Reusable playbooks (`SKILL.md`) |
 | `_shared/schema/tables.md` | SQL allowlist + descriptions |
 | `<agent_id>/AGENT.md` | Identity, role, skills list (no model — models live in config) |
 | `<agent_id>/rules/` | Agent-specific rules |
 | `<agent_id>/skills/` | Agent-specific skills |
 | `registry.md` | Pipeline index |
+
+## Seed pipeline
+
+```text
+guardian → data-gatherer → validator → result-builder → validator → publisher
+```
 
 ## Adding an agent
 
@@ -25,4 +31,4 @@ Agents are **arranged and executed** (Markdown + `helix.config.example.yaml` mod
 3. Register in `registry.md`.
 4. Add `openrouter.agents.<agent_id>.model` in `helix.config.example.yaml` / your local `helix.config.yaml`.
 
-See [registry.md](registry.md) for the current four-agent pipeline.
+See [registry.md](registry.md) for the current six-step pipeline.

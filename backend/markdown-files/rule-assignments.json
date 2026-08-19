@@ -2,42 +2,30 @@
   "guard-prompt": [
     "guardian"
   ],
-  "select-only": [
-    "sql_fetcher"
-  ],
-  "fast-query": [
-    "guardian",
-    "sql_fetcher",
-    "validator"
-  ],
-  "package-payload": [
-    "response_builder"
+  "warehouse-sql": [
+    "data-gatherer"
   ],
   "match-goal": [
     "validator"
   ],
-  "security": [
+  "build-result": [
+    "result-builder"
+  ],
+  "package-payload": [
+    "publisher"
+  ],
+  "core-behavior": [
     "guardian",
-    "sql_fetcher",
-    "response_builder",
-    "validator"
+    "data-gatherer",
+    "validator",
+    "result-builder",
+    "publisher"
   ],
   "output-contract": [
     "guardian",
-    "sql_fetcher",
-    "response_builder",
-    "validator"
-  ],
-  "base-behavior": [
-    "guardian",
-    "sql_fetcher",
-    "response_builder",
-    "validator"
-  ],
-  "product-scope": [
-    "guardian",
-    "sql_fetcher",
-    "response_builder",
-    "validator"
+    "data-gatherer",
+    "validator",
+    "result-builder",
+    "publisher"
   ]
 }

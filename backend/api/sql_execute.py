@@ -149,7 +149,6 @@ def _allowlisted_names() -> set[str]:
 def validate_select(sql: str) -> str:
     settings = get_sql_settings()
     statement = extract_sql(sql)
-    statement = _rewrite_saleslt_to_pakhsh(statement)
     if not statement:
         raise ValueError("SQL is empty")
     if ";" in statement:

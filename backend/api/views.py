@@ -197,13 +197,11 @@ def agents_list(request: HttpRequest) -> JsonResponse:
         agent_id = body.get("id") or ""
         name = body.get("role") or body.get("name") or ""
         description = body.get("description") or ""
-        human_name = body.get("human_name") or ""
         try:
             created = create_custom_agent(
                 str(agent_id),
                 str(name),
                 str(description) if description is not None else "",
-                human_name=str(human_name) if human_name is not None else "",
             )
         except ValueError as exc:
             return _error(str(exc), 400)
@@ -523,7 +521,6 @@ def agent_rename(request: HttpRequest, agent_id: str) -> JsonResponse:
         return _error(str(exc))
     name = body.get("role") if "role" in body else body.get("name")
     disabled = body.get("disabled")
-    human_name = body.get("human_name")
     description = body.get("description")
     if name is not None:
         if not isinstance(name, str):
@@ -539,11 +536,10 @@ def agent_rename(request: HttpRequest, agent_id: str) -> JsonResponse:
             set_agent_disabled(agent_id, bool(disabled))
         except KeyError:
             return _error(f"Unknown agent: {agent_id}", 404)
-    if human_name is not None or description is not None:
+    if description is not None:
         try:
             update_agent_fields(
                 agent_id,
-                human_name=str(human_name) if human_name is not None else None,
                 description=str(description) if description is not None else None,
             )
         except ValueError as exc:
@@ -712,6 +708,7 @@ def results_collection(request: HttpRequest) -> JsonResponse:
         mode=mode,
         language=language,
         payload=payload,
+        duration_s=body.get("duration_s"),
     )
     return JsonResponse(item, status=201)
 
