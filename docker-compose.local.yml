@@ -1,0 +1,77 @@
+# Local Docker hot-reload: Postgres + Django runserver + Vite WebUI (bind mounts).
+# Usage: docker compose -f docker-compose.local.yml -p helix-local up -d --force-recreate
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: helix
+      POSTGRES_USER: helix
+      POSTGRES_PASSWORD: helix
+    ports:
+      - "5440:5432"
+    volumes:
+      - helix-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helix -d helix"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: dockerfile
+    image: helix-api:local-dev
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DJANGO_SETTINGS_MODULE: helix.settings
+      HELIX_DEBUG: "true"
+      HELIX_ALLOWED_HOSTS: "*"
+      HELIX_CORS_ORIGINS: "http://127.0.0.1:5178,http://localhost:5178"
+      DATABASE_URL: postgresql://helix:helix@postgres:5432/helix
+      PORT: "8000"
+      OPENROUTER_TOKEN: ${OPENROUTER_TOKEN:-}
+      CURSOR_API_KEY: ${CURSOR_API_KEY:-}
+    entrypoint: []
+    command:
+      - sh
+      - -c
+      - pip install -q -r backend/requirements.txt && cd backend && python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+      - helix-pip-cache:/root/.cache/pip
+    ports:
+      - "8173:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  webui:
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+      VITE_API_PROXY: http://api:8000
+      VITE_API_BASE_URL: ""
+      VITE_BASE_PATH: /helix/
+    command:
+      - sh
+      - -c
+      - npm install && npm run dev -- --host 0.0.0.0 --port 5173 --strictPort
+    volumes:
+      - ../helix-webui:/app
+      - helix-webui-node-modules:/app/node_modules
+    ports:
+      - "5178:5173"
+    depends_on:
+      - api
+
+volumes:
+  helix-postgres-data:
+  helix-pip-cache:
+  helix-webui-node-modules:
