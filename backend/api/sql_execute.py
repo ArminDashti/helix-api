@@ -146,7 +146,12 @@ def _allowlisted_names() -> set[str]:
     return names
 
 
-def validate_select(sql: str) -> str:
+def validate_select(
+    sql: str,
+    *,
+    actor_allowed_tables: list[str] | None = None,
+    actor_is_admin: bool = False,
+) -> str:
     settings = get_sql_settings()
     statement = extract_sql(sql)
     if not statement:
@@ -171,6 +176,17 @@ def validate_select(sql: str) -> str:
     allowed: set[str] = set()
     if enforce_allowlist:
         allowed = _allowlisted_names()
+    user_tables = {
+        str(name).split(".")[-1].lower()
+        for name in (actor_allowed_tables or [])
+        if str(name).strip()
+    }
+    if not actor_is_admin and actor_allowed_tables is not None:
+        if not user_tables:
+            raise ValueError("User has no allowed warehouse tables")
+        for _schema, table in from_tokens:
+            if table.lower() not in user_tables:
+                raise ValueError(f"Table {table} is not allowed for this user")
     # #region agent log
     _dbg(
         "sql_execute.py:validate_select",
@@ -181,6 +197,7 @@ def validate_select(sql: str) -> str:
             "allowed_contains_tables": {
                 table.lower(): table.lower() in allowed for _, table in from_tokens
             },
+            "user_tables": sorted(user_tables),
             "sql_preview": statement[:500],
         },
         "A",
@@ -253,8 +270,26 @@ def _sql_error_message(exc: BaseException) -> str:
     return _exception_text(exc)
 
 
-def execute_select(sql: str, *, row_cap: int | None = None) -> dict[str, Any]:
-    statement = validate_select(sql)
+def execute_select(
+    sql: str,
+    *,
+    row_cap: int | None = None,
+    actor: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    actor = actor or {}
+    per_user: list[str] | None = None
+    if (
+        actor
+        and not actor.get("is_admin")
+        and not actor.get("is_guest")
+        and not actor.get("unknown")
+    ):
+        per_user = list(actor.get("allowed_tables") or [])
+    statement = validate_select(
+        sql,
+        actor_allowed_tables=per_user,
+        actor_is_admin=bool(actor.get("is_admin")),
+    )
     settings = get_sql_settings()
     max_rows = int(settings["max_rows"])
     if row_cap is not None:

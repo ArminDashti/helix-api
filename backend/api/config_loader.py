@@ -1,4 +1,4 @@
-"""Read/write helix.config.yaml (database + openrouter LLM + unused cursor sections)."""
+"""Read/write helix.config.yaml (database + openrouter + cursor LLM)."""
 
 from __future__ import annotations
 
@@ -32,7 +32,8 @@ TOKEN_ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_OPENROUTER_TOKEN_ENV = "OPENROUTER_TOKEN"
 DEFAULT_CURSOR_TOKEN_ENV = "CURSOR_API_KEY"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-VALID_PROVIDERS = ("openrouter", "openai_compatible")
+DEFAULT_CURSOR_ADAPTER_BASE_URL = "http://127.0.0.1:8130/v1"
+VALID_PROVIDERS = ("openrouter", "openai_compatible", "cursor")
 
 DEFAULT_DATABASE = {
     # Built-in AdventureWorks LT sample SQLite (seeded on first start).
@@ -77,6 +78,7 @@ DEFAULT_OPENROUTER = {
 
 DEFAULT_CURSOR = {
     "token_env": DEFAULT_CURSOR_TOKEN_ENV,
+    "adapter_base_url": DEFAULT_CURSOR_ADAPTER_BASE_URL,
     "app_name": "Helix",
     "default_model": DEFAULT_LLM_MODEL,
     "agents": {
@@ -525,8 +527,24 @@ def _rewrite_unresolvable_hostname_to_localhost(base_url: str) -> str:
         return parsed._replace(netloc=netloc).geturl()
 
 
+def get_cursor_adapter_base_url() -> str:
+    """OpenAI-compatible chat bridge for Cursor Cloud (local cursor-api by default)."""
+    data = load_config()
+    raw = data.get("cursor") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    stored = _rewrite_unresolvable_hostname_to_localhost(
+        _normalize_base_url(raw.get("adapter_base_url"))
+    )
+    if stored:
+        return stored
+    return DEFAULT_CURSOR_ADAPTER_BASE_URL
+
+
 def get_llm_base_url() -> str:
-    """Chat/models host: stored base_url, else OpenRouter default when that provider is selected."""
+    """Chat/models host: Cursor adapter, OpenRouter stored URL, or OpenRouter default."""
+    if get_provider() == "cursor":
+        return get_cursor_adapter_base_url()
     data = load_config()
     raw = data.get("openrouter") or {}
     if not isinstance(raw, dict):
@@ -765,19 +783,70 @@ def get_provider() -> str:
         value = raw.strip().lower()
         if value in VALID_PROVIDERS:
             return value
-        if value == "cursor":
-            return DEFAULT_PROVIDER
     return DEFAULT_PROVIDER
 
 
 def update_provider(provider: str) -> str:
     value = (provider or "").strip().lower()
     if value not in VALID_PROVIDERS:
-        raise ValueError("provider must be openrouter or openai_compatible")
+        raise ValueError(
+            "provider must be openrouter, openai_compatible, or cursor"
+        )
     data = load_config()
     data["provider"] = value
     save_config(data)
     return value
+
+
+def detect_cursor_install() -> dict[str, Any]:
+    """Return whether the Cursor desktop app appears installed on this machine."""
+    import shutil
+
+    which = shutil.which("cursor")
+    if which and Path(which).is_file():
+        return {
+            "installed": True,
+            "detail": "",
+            "path": which,
+        }
+
+    candidates: list[Path] = []
+    local_app = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_app:
+        candidates.append(Path(local_app) / "Programs" / "cursor" / "Cursor.exe")
+        candidates.append(Path(local_app) / "Programs" / "Cursor" / "Cursor.exe")
+    program_files = os.environ.get("ProgramFiles", "").strip()
+    if program_files:
+        candidates.append(Path(program_files) / "Cursor" / "Cursor.exe")
+    home = Path.home()
+    candidates.extend(
+        [
+            home / "AppData" / "Local" / "Programs" / "cursor" / "Cursor.exe",
+            home / "Applications" / "Cursor.app",
+            Path("/Applications/Cursor.app"),
+            Path("/usr/bin/cursor"),
+            Path("/usr/local/bin/cursor"),
+        ]
+    )
+    for path in candidates:
+        try:
+            if path.exists():
+                return {
+                    "installed": True,
+                    "detail": "",
+                    "path": str(path),
+                }
+        except OSError:
+            continue
+
+    return {
+        "installed": False,
+        "detail": (
+            "Cursor is not installed on this machine. "
+            "Install it from https://cursor.com then try again."
+        ),
+        "path": "",
+    }
 
 
 def get_custom_agents() -> list[dict[str, str]]:
@@ -1253,6 +1322,9 @@ def get_cursor_settings() -> dict[str, Any]:
             agents[agent_id] = {"model": default_model}
 
     token = get_cursor_token()
+    adapter = _rewrite_unresolvable_hostname_to_localhost(
+        _normalize_base_url(raw.get("adapter_base_url"))
+    ) or DEFAULT_CURSOR_ADAPTER_BASE_URL
     return {
         "app_name": (
             DEFAULT_CURSOR["app_name"]
@@ -1261,6 +1333,7 @@ def get_cursor_settings() -> dict[str, Any]:
         ),
         "default_model": default_model,
         "agents": agents,
+        "adapter_base_url": adapter,
         "token_configured": bool(token),
     }
 
@@ -1271,6 +1344,12 @@ def update_cursor_settings(payload: dict[str, Any]) -> dict[str, Any]:
     raw = data.get("cursor") if isinstance(data.get("cursor"), dict) else {}
     stored_token = _section_stored_token(raw)
     stored_env = _token_env_from_section(raw, DEFAULT_CURSOR_TOKEN_ENV)
+    stored_adapter = (
+        _rewrite_unresolvable_hostname_to_localhost(
+            _normalize_base_url(raw.get("adapter_base_url"))
+        )
+        or DEFAULT_CURSOR_ADAPTER_BASE_URL
+    )
 
     if "token" in payload:
         incoming = payload.get("token")
@@ -1280,6 +1359,17 @@ def update_cursor_settings(payload: dict[str, Any]) -> dict[str, Any]:
         stored_env = _normalize_token_env(
             payload["token_env"], DEFAULT_CURSOR_TOKEN_ENV
         )
+    if "adapter_base_url" in payload:
+        value = payload.get("adapter_base_url")
+        if value is None or str(value).strip() == "":
+            stored_adapter = DEFAULT_CURSOR_ADAPTER_BASE_URL
+        else:
+            stored_adapter = (
+                _rewrite_unresolvable_hostname_to_localhost(
+                    _normalize_base_url(value)
+                )
+                or DEFAULT_CURSOR_ADAPTER_BASE_URL
+            )
     if "app_name" in payload:
         value = payload["app_name"]
         current["app_name"] = DEFAULT_CURSOR["app_name"] if value in (None, "") else str(value)
@@ -1306,6 +1396,7 @@ def update_cursor_settings(payload: dict[str, Any]) -> dict[str, Any]:
 
     section: dict[str, Any] = {
         "token_env": stored_env,
+        "adapter_base_url": stored_adapter,
         "app_name": current["app_name"],
         "default_model": current["default_model"],
         "agents": deepcopy(current["agents"]),
@@ -1338,7 +1429,10 @@ def get_sql_settings() -> dict[str, Any]:
 
 
 def get_active_provider_settings() -> dict[str, Any]:
-    return {"provider": get_provider(), "settings": get_openrouter_settings()}
+    provider = get_provider()
+    if provider == "cursor":
+        return {"provider": provider, "settings": get_cursor_settings()}
+    return {"provider": provider, "settings": get_openrouter_settings()}
 
 
 def get_agent_model(agent_id: str) -> str:

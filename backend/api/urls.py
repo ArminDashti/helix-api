@@ -40,9 +40,20 @@ urlpatterns = [
         views.admin_cursor_models,
         name="admin-cursor-models",
     ),
+    path(
+        "admin/cursor/install-status/",
+        views.admin_cursor_install_status,
+        name="admin-cursor-install-status",
+    ),
     path("admin/pipeline-graph/", views.admin_pipeline_graph, name="admin-pipeline-graph"),
     path("admin/users/", views.admin_users, name="admin-users"),
     path("admin/users/<str:user_id>/", views.admin_user_detail, name="admin-user-detail"),
+    path("sample-tiers/", views.sample_tiers, name="sample-tiers"),
+    path(
+        "sample-tiers/<str:tier_id>/ensure/",
+        views.sample_tier_ensure,
+        name="sample-tier-ensure",
+    ),
     path("runs/stream", views.runs_stream, name="runs-stream"),
     path("chat", views.chat, name="chat"),
 ]

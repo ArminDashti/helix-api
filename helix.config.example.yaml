@@ -1,9 +1,11 @@
 # Copy to helix.config.yaml and fill in secrets.
 # Do not commit helix.config.yaml.
 #
-# Paste the OpenRouter or OpenAI-compatible API key in the web UI Settings page.
-# Keys are stored as openrouter.token (never returned by the API).
-# provider: openrouter | openai_compatible — both use OpenAI-compatible chat completions.
+# Paste the OpenRouter, OpenAI-compatible, or Cursor Cloud API key in Settings.
+# Keys are stored as openrouter.token or cursor.token (never returned by the API).
+# provider: openrouter | openai_compatible | cursor
+# - openrouter / openai_compatible: OpenAI-compatible chat via openrouter.base_url
+# - cursor: Cloud key + models; chat via local cursor-api adapter (adapter_base_url)
 # openrouter.base_url defaults to https://openrouter.ai/api/v1 for OpenRouter.
 provider: openrouter
 
@@ -30,9 +32,11 @@ openrouter:
       model: "composer-2.5"
 
 
-# Unused leftover section (Settings no longer edits this). Chat uses openrouter.* only.
+# Cursor Cloud API key + local OpenAI-compatible adapter (cursor-api) for chat.
+# Requires Cursor desktop installed on the API host. Models come from api.cursor.com.
 cursor:
   token_env: CURSOR_API_KEY
+  adapter_base_url: "http://127.0.0.1:8130/v1"
   app_name: "Helix"
   default_model: "composer-2.5"
   agents:

@@ -260,12 +260,15 @@ class DocsCatalogPromptTests(SimpleTestCase):
 
 
 class LlmSettingsTests(SimpleTestCase):
-    def test_leftover_cursor_provider_reads_as_openrouter(self):
+    def test_cursor_provider_uses_adapter_base_url(self):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "helix.config.yaml"
             with override_settings(HELIX_CONFIG_PATH=str(config_path)):
                 save_config({"provider": "cursor"})
-                self.assertEqual(get_provider(), "openrouter")
+                self.assertEqual(get_provider(), "cursor")
+                self.assertEqual(get_llm_base_url(), "http://127.0.0.1:8130/v1")
+                update_provider("cursor")
+                self.assertEqual(get_provider(), "cursor")
 
     def test_openai_compatible_requires_stored_base_url(self):
         with tempfile.TemporaryDirectory() as tmp:

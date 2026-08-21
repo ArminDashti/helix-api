@@ -11,7 +11,10 @@ import socket
 
 from .config_loader import (
     DEFAULT_LLM_MODEL,
+    detect_cursor_install,
     get_agent_model,
+    get_cursor_settings,
+    get_cursor_token,
     get_llm_base_url,
     get_llm_timeout_seconds,
     get_openrouter_settings,
@@ -21,11 +24,30 @@ from .config_loader import (
 
 _OPENROUTER_AUTO_MODEL = DEFAULT_LLM_MODEL
 _OPENAI_COMPAT_AUTO_MODEL = DEFAULT_LLM_MODEL
+_CURSOR_AUTO_MODEL = DEFAULT_LLM_MODEL
 
 
 def require_llm() -> tuple[str, str, str]:
     """Return (provider, token, base_url) or raise if the selected LLM cannot be used."""
     provider = get_provider()
+    if provider == "cursor":
+        install = detect_cursor_install()
+        if not install.get("installed"):
+            raise ValueError(
+                install.get("detail")
+                or (
+                    "Cursor is not installed on this machine. "
+                    "Install it from https://cursor.com then try again."
+                )
+            )
+        token = get_cursor_token()
+        if not token:
+            raise ValueError("Cursor API key is not set")
+        base_url = get_llm_base_url()
+        if not base_url:
+            raise ValueError("Cursor adapter base URL is not set")
+        return provider, token, base_url
+
     token = get_openrouter_token()
     if not token:
         raise ValueError("API key is not set")
@@ -56,6 +78,13 @@ def _complete_via_chat_completions(
     if not model or model == "auto":
         if provider == "openrouter":
             model = _OPENROUTER_AUTO_MODEL
+        elif provider == "cursor":
+            default = str(get_cursor_settings().get("default_model") or "").strip()
+            model = (
+                default
+                if default and default != "auto"
+                else _CURSOR_AUTO_MODEL
+            )
         else:
             default = str(get_openrouter_settings().get("default_model") or "").strip()
             model = (

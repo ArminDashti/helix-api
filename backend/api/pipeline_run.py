@@ -298,7 +298,9 @@ def _run_agent(node_id: str, ctx: dict[str, Any]) -> tuple[str, str]:
             )
         sql_text = str(parsed.get("sql") or extract_sql(raw) or "")
         try:
-            fetch = execute_select(sql_text, row_cap=DATA_GATHERER_MAX_ROWS)
+            fetch = execute_select(
+                sql_text, row_cap=DATA_GATHERER_MAX_ROWS, actor=ctx.get("actor")
+            )
         except Exception as exc:
             err_text = _sql_error_message(exc)
             ctx.setdefault("artifacts", {})[_artifact_key(node_id)] = {
@@ -371,12 +373,29 @@ def _run_agent(node_id: str, ctx: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def _normalize_chart_types(ctx: dict[str, Any]) -> list[str]:
+    raw = ctx.get("chart_types")
+    types: list[str] = []
+    if isinstance(raw, list):
+        for item in raw:
+            value = str(item or "").strip()
+            if value in VALID_CHART_TYPES and value not in types:
+                types.append(value)
+            if len(types) >= 4:
+                break
+    if not types:
+        single = ctx.get("chart_type") or "bar"
+        if single not in VALID_CHART_TYPES:
+            single = "bar"
+        types = [single]
+    return types
+
+
 def _package_result(ctx: dict[str, Any]) -> dict[str, Any]:
     mode = ctx.get("mode") or "auto"
     language = ctx.get("language") or "en"
-    chart_type = ctx.get("chart_type") or "bar"
-    if chart_type not in VALID_CHART_TYPES:
-        chart_type = "bar"
+    chart_types = _normalize_chart_types(ctx)
+    chart_type = chart_types[0]
     fetch = ctx.get("sql_fetch") if isinstance(ctx.get("sql_fetch"), dict) else None
     text_report = ctx.get("text_report")
     if not text_report:
@@ -394,22 +413,31 @@ def _package_result(ctx: dict[str, Any]) -> dict[str, Any]:
             else f"پرس‌وجو {count} ردیف برگرداند."
         )
     echarts_option = None
+    echarts_options: list[dict[str, Any]] = []
     grid = None
     if fetch:
         if mode in ("chart", "analytical_report_chart", "auto"):
-            echarts_option = build_echarts_option(
-                fetch, chart_type=chart_type, language=language
-            )
+            for ctype in chart_types:
+                option = build_echarts_option(
+                    fetch, chart_type=ctype, language=language
+                )
+                if option:
+                    echarts_options.append({"chart_type": ctype, "option": option})
+            if echarts_options:
+                echarts_option = echarts_options[0]["option"]
+                chart_type = echarts_options[0]["chart_type"]
         if mode in ("grid", "auto", "analytical_report_chart"):
             grid = build_grid(fetch, ctx.get("columns"))
         if mode == "analytical_report":
             grid = None
             echarts_option = None
+            echarts_options = []
         if mode == "chart":
             text_report = None
         if mode == "grid":
             text_report = None
             echarts_option = None
+            echarts_options = []
     if mode in ("analytical_report", "analytical_report_chart", "auto") and not text_report:
         raise ValueError("No report text was produced from the query results")
     if mode in ("chart", "analytical_report_chart", "auto") and not echarts_option and mode != "analytical_report":
@@ -420,8 +448,10 @@ def _package_result(ctx: dict[str, Any]) -> dict[str, Any]:
         "language": language,
         "report_type": ctx.get("report_type"),
         "chart_type": chart_type if echarts_option else None,
+        "chart_types": [item["chart_type"] for item in echarts_options] or None,
         "text_report": text_report,
         "echarts_option": echarts_option,
+        "echarts_options": echarts_options or None,
         "grid": grid,
         "used_demo": False,
     }
@@ -434,6 +464,7 @@ def pipeline_events(
     language: str = "en",
     report_type: str | None = None,
     chart_type: str | None = None,
+    chart_types: list[str] | None = None,
     columns: list[str] | None = None,
     actor: dict[str, Any] | None = None,
 ) -> Iterator[str]:
@@ -443,6 +474,7 @@ def pipeline_events(
         "language": language,
         "report_type": report_type,
         "chart_type": chart_type,
+        "chart_types": chart_types,
         "columns": columns,
         "actor": actor or {"username": "guest", "is_admin": False, "is_guest": True},
         "artifacts": {},
@@ -598,6 +630,7 @@ def run_pipeline_sync(
     language: str = "en",
     report_type: str | None = None,
     chart_type: str | None = None,
+    chart_types: list[str] | None = None,
     columns: list[str] | None = None,
     actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -609,6 +642,7 @@ def run_pipeline_sync(
         language=language,
         report_type=report_type,
         chart_type=chart_type,
+        chart_types=chart_types,
         columns=columns,
         actor=actor,
     ):

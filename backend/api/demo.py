@@ -256,21 +256,37 @@ def get_demo_result(
     language: str = "en",
     report_type: str | None = None,
     chart_type: str | None = None,
+    chart_types: list[str] | None = None,
     columns: list[str] | None = None,
 ) -> dict[str, Any]:
     mode = _normalize_mode(mode or "auto")
     language = language if language in VALID_LANGUAGES else "en"
     report_type = _normalize_report_type(report_type)
-    chart_type = chart_type if chart_type in VALID_CHART_TYPES else "bar"
+    types: list[str] = []
+    if isinstance(chart_types, list):
+        for item in chart_types:
+            value = str(item or "").strip()
+            if value in VALID_CHART_TYPES and value not in types:
+                types.append(value)
+            if len(types) >= 4:
+                break
+    if not types:
+        single = chart_type if chart_type in VALID_CHART_TYPES else "bar"
+        types = [single]
+    chart_type = types[0]
 
     text_report = None
     echarts_option = None
+    echarts_options: list[dict[str, Any]] = []
     grid = None
 
     if mode in ("analytical_report", "analytical_report_chart", "auto"):
         text_report = _text_report(language, report_type)
     if mode in ("chart", "analytical_report_chart", "auto"):
-        echarts_option = _chart_option(chart_type, language)
+        for ctype in types:
+            option = _chart_option(ctype, language)
+            echarts_options.append({"chart_type": ctype, "option": option})
+        echarts_option = echarts_options[0]["option"] if echarts_options else None
     if mode == "grid":
         grid = _grid_payload(columns, language)
 
@@ -279,7 +295,9 @@ def get_demo_result(
         "language": language,
         "report_type": report_type if text_report else None,
         "chart_type": chart_type if echarts_option else None,
+        "chart_types": [item["chart_type"] for item in echarts_options] or None,
         "text_report": text_report,
         "echarts_option": echarts_option,
+        "echarts_options": echarts_options or None,
         "grid": grid,
     }

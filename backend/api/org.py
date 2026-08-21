@@ -73,12 +73,22 @@ def _normalize_users(raw: list[Any]) -> list[dict[str, Any]]:
             continue
         seen.add(user_id)
         display = str(entry.get("display_name") or "").strip() or username
+        plain = str(entry.get("data_access_plain") or "").strip()
+        tables_raw = entry.get("allowed_tables")
+        tables: list[str] = []
+        if isinstance(tables_raw, list):
+            for item in tables_raw:
+                name = str(item or "").strip()
+                if name and name not in tables:
+                    tables.append(name)
         result.append(
             {
                 "id": user_id,
                 "username": username,
                 "display_name": display[:80],
                 "is_admin": bool(entry.get("is_admin")),
+                "data_access_plain": plain[:2000],
+                "allowed_tables": tables,
             }
         )
     return result
@@ -127,6 +137,8 @@ def create_user(
     display_name: str,
     *,
     is_admin: bool = False,
+    data_access_plain: str = "",
+    allowed_tables: list[str] | None = None,
 ) -> dict[str, Any]:
     cleaned_username = (username or "").strip().lower()
     if not USERNAME_RE.match(cleaned_username):
@@ -145,6 +157,12 @@ def create_user(
         "username": cleaned_username,
         "display_name": cleaned_display,
         "is_admin": bool(is_admin),
+        "data_access_plain": str(data_access_plain or "").strip()[:2000],
+        "allowed_tables": [
+            str(t).strip()
+            for t in (allowed_tables or [])
+            if str(t).strip()
+        ],
     }
     users.append(item)
     data["users"] = users
@@ -192,6 +210,20 @@ def update_user(user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
             if admin_count < 1:
                 raise ValueError("Cannot remove the last admin")
         current["is_admin"] = next_admin
+
+    if "data_access_plain" in payload and payload["data_access_plain"] is not None:
+        current["data_access_plain"] = str(payload["data_access_plain"] or "").strip()[
+            :2000
+        ]
+    if "allowed_tables" in payload and payload["allowed_tables"] is not None:
+        tables: list[str] = []
+        raw = payload["allowed_tables"]
+        if isinstance(raw, list):
+            for item in raw:
+                name = str(item or "").strip()
+                if name and name not in tables:
+                    tables.append(name)
+        current["allowed_tables"] = tables
 
     data["users"] = users
     save_config(data)

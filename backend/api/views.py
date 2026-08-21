@@ -19,6 +19,7 @@ from .config_loader import (
     create_custom_agent,
     database_to_connection_string,
     delete_custom_agent,
+    detect_cursor_install,
     fetch_cursor_models,
     fetch_openrouter_models,
     get_active_provider_settings,
@@ -160,8 +161,31 @@ def health(request: HttpRequest) -> JsonResponse:
         }
 
     provider = get_provider()
-    if not get_openrouter_token():
-        llm: dict[str, Any] = {"status": "missing_token", "detail": "API key is not set"}
+    if provider == "cursor":
+        install = detect_cursor_install()
+        if not install.get("installed"):
+            llm = {
+                "status": "not_configured",
+                "detail": install.get("detail")
+                or (
+                    "Cursor is not installed on this machine. "
+                    "Install it from https://cursor.com then try again."
+                ),
+            }
+        elif not get_cursor_token():
+            llm = {
+                "status": "missing_token",
+                "detail": "Cursor API key is not set",
+            }
+        elif not get_llm_base_url():
+            llm = {
+                "status": "not_configured",
+                "detail": "Cursor adapter base URL is not set",
+            }
+        else:
+            llm = {"status": "configured", "detail": ""}
+    elif not get_openrouter_token():
+        llm = {"status": "missing_token", "detail": "API key is not set"}
     elif provider == "openai_compatible" and not get_llm_base_url():
         llm = {"status": "not_configured", "detail": "Base URL is not set"}
     else:
@@ -650,6 +674,12 @@ def admin_cursor_models(request: HttpRequest) -> JsonResponse:
 
 @csrf_exempt
 @require_http_methods(["GET"])
+def admin_cursor_install_status(request: HttpRequest) -> JsonResponse:
+    return JsonResponse(detect_cursor_install())
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
 def docs_tables(request: HttpRequest) -> JsonResponse:
     return JsonResponse(docs_catalog.list_docs_tables())
 
@@ -858,12 +888,16 @@ def admin_pipeline_graph(request: HttpRequest) -> JsonResponse:
 
 def _parse_run_options(
     body: dict[str, Any],
-) -> tuple[str, str, str, str | None, str | None, list[str] | None] | JsonResponse:
+) -> (
+    tuple[str, str, str, str | None, str | None, list[str] | None, list[str] | None]
+    | JsonResponse
+):
     prompt = (body.get("prompt") or "").strip()
     mode = body.get("mode") or "auto"
     language = body.get("language") or "en"
     report_type = body.get("report_type") or None
     chart_type = body.get("chart_type") or None
+    raw_chart_types = body.get("chart_types")
     raw_columns = body.get("columns")
 
     if mode not in VALID_MODES:
@@ -879,6 +913,24 @@ def _parse_run_options(
     if chart_type is not None and chart_type not in VALID_CHART_TYPES:
         return _error("chart_type is invalid")
 
+    chart_types: list[str] | None = None
+    if isinstance(raw_chart_types, list):
+        chart_types = []
+        for item in raw_chart_types:
+            value = str(item or "").strip()
+            if value not in VALID_CHART_TYPES:
+                return _error("chart_types contains an invalid chart type")
+            if value not in chart_types:
+                chart_types.append(value)
+            if len(chart_types) >= 4:
+                break
+        if not chart_types:
+            chart_types = None
+    if chart_types and not chart_type:
+        chart_type = chart_types[0]
+    elif chart_type and not chart_types:
+        chart_types = [chart_type]
+
     columns: list[str] | None = None
     if isinstance(raw_columns, list):
         columns = [str(c).strip() for c in raw_columns if str(c).strip()]
@@ -889,7 +941,7 @@ def _parse_run_options(
             if p.strip()
         ]
 
-    return prompt, mode, language, report_type, chart_type, columns
+    return prompt, mode, language, report_type, chart_type, chart_types, columns
 
 
 def _resolve_actor(body: dict[str, Any]) -> dict[str, Any]:
@@ -902,6 +954,8 @@ def _resolve_actor(body: dict[str, Any]) -> dict[str, Any]:
                 "id": user["id"],
                 "username": user["username"],
                 "is_admin": bool(user["is_admin"]),
+                "allowed_tables": list(user.get("allowed_tables") or []),
+                "data_access_plain": str(user.get("data_access_plain") or ""),
             }
     return {"username": username, "is_admin": False, "unknown": True}
 
@@ -917,7 +971,7 @@ def runs_stream(request: HttpRequest) -> HttpResponse:
     parsed = _parse_run_options(body)
     if isinstance(parsed, JsonResponse):
         return parsed
-    prompt, mode, language, report_type, chart_type, columns = parsed
+    prompt, mode, language, report_type, chart_type, chart_types, columns = parsed
     actor = _resolve_actor(body)
 
     try:
@@ -1011,6 +1065,7 @@ def runs_stream(request: HttpRequest) -> HttpResponse:
             language=language,
             report_type=report_type,
             chart_type=chart_type,
+            chart_types=chart_types,
             columns=columns,
             actor=actor,
         ),
@@ -1033,7 +1088,7 @@ def chat(request: HttpRequest) -> JsonResponse:
     parsed = _parse_run_options(body)
     if isinstance(parsed, JsonResponse):
         return parsed
-    prompt, mode, language, report_type, chart_type, columns = parsed
+    prompt, mode, language, report_type, chart_type, chart_types, columns = parsed
     actor = _resolve_actor(body)
     try:
         require_llm()
@@ -1055,6 +1110,7 @@ def chat(request: HttpRequest) -> JsonResponse:
             language=language,
             report_type=report_type,
             chart_type=chart_type,
+            chart_types=chart_types,
             columns=columns,
             actor=actor,
         )
@@ -1077,6 +1133,33 @@ def chat(request: HttpRequest) -> JsonResponse:
 
 
 @csrf_exempt
+@require_http_methods(["GET"])
+def sample_tiers(request: HttpRequest) -> JsonResponse:
+    from .sample_database import list_sample_tiers
+
+    return JsonResponse({"tiers": list_sample_tiers()})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def sample_tier_ensure(request: HttpRequest, tier_id: str) -> JsonResponse:
+    from .sample_database import ensure_sample_tier
+
+    try:
+        body = _json_body(request) if request.body else {}
+    except ValueError:
+        body = {}
+    force = bool(body.get("force")) if isinstance(body, dict) else False
+    try:
+        item = ensure_sample_tier(tier_id, force=force)
+    except KeyError:
+        return _error(f"Unknown sample tier: {tier_id}", 404)
+    except Exception as exc:
+        return _error(str(exc), 500)
+    return JsonResponse(item)
+
+
+@csrf_exempt
 @require_http_methods(["GET", "POST"])
 def admin_users(request: HttpRequest) -> JsonResponse:
     if request.method == "GET":
@@ -1085,11 +1168,20 @@ def admin_users(request: HttpRequest) -> JsonResponse:
         body = _json_body(request)
     except ValueError as exc:
         return _error(str(exc))
+    from .access_policy import review_data_access_policy
+
+    is_admin = bool(body.get("is_admin"))
+    plain = str(body.get("data_access_plain") or "")
+    review = review_data_access_policy(plain, is_admin=is_admin)
+    if not review.get("accepted"):
+        return _error(str(review.get("message") or "Guardian rejected data access"), 400)
     try:
         item = org.create_user(
             str(body.get("username") or ""),
             str(body.get("display_name") or ""),
-            is_admin=bool(body.get("is_admin")),
+            is_admin=is_admin,
+            data_access_plain=str(review.get("data_access_plain") or plain),
+            allowed_tables=list(review.get("allowed_tables") or []),
         )
     except ValueError as exc:
         return _error(str(exc))
@@ -1111,6 +1203,33 @@ def admin_user_detail(request: HttpRequest, user_id: str) -> JsonResponse:
         body = _json_body(request)
     except ValueError as exc:
         return _error(str(exc))
+    if "data_access_plain" in body or "allowed_tables" in body:
+        from .access_policy import review_data_access_policy
+
+        try:
+            existing = org.get_user(user_id)
+        except KeyError:
+            return _error(f"Unknown user: {user_id}", 404)
+        is_admin = (
+            bool(body["is_admin"])
+            if "is_admin" in body and body["is_admin"] is not None
+            else bool(existing.get("is_admin"))
+        )
+        plain = (
+            str(body.get("data_access_plain"))
+            if "data_access_plain" in body
+            else str(existing.get("data_access_plain") or "")
+        )
+        review = review_data_access_policy(plain, is_admin=is_admin)
+        if not review.get("accepted"):
+            return _error(
+                str(review.get("message") or "Guardian rejected data access"), 400
+            )
+        body = {
+            **body,
+            "data_access_plain": review.get("data_access_plain") or plain,
+            "allowed_tables": list(review.get("allowed_tables") or []),
+        }
     try:
         item = org.update_user(user_id, body)
     except KeyError:

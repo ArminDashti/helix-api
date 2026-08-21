@@ -61,3 +61,5 @@ graft/
 # Local scratch query files
 backend/_tmp_query.py
 .armin/tmp-*
+
+# AUTO-IGNORE-LARGE-FILES (>5MB) â€” managed by github-commit-push-all
