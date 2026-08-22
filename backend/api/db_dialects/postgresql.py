@@ -9,6 +9,7 @@ from .base import (
     ALLOWED_LIMITS,
     cell_value,
     parse_table_name,
+    prefer_id_order_column,
     validate_order_column,
     validate_where,
 )
@@ -147,14 +148,15 @@ def select_rows(
         raise ValueError("sort must be ASC or DESC")
 
     schema, name = parse_table_name(table, default_schema=default_schema())
-    columns = [c["name"] for c in list_columns(schema, name)]
+    col_metas = list_columns(schema, name)
+    columns = [c["name"] for c in col_metas]
     if not columns:
         raise ValueError(f"No columns found for {schema}.{name}")
 
     where_clause = validate_where(where)
     order_col = validate_order_column(order_by, columns)
     if not order_col:
-        order_col = columns[0]
+        order_col = prefer_id_order_column(col_metas) or columns[0]
 
     effective_sort = sort_dir
     if position == "tail":

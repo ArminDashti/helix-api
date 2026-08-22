@@ -27,6 +27,7 @@ urlpatterns = [
     path("db-explorer/columns/", views.db_explorer_columns, name="db-explorer-columns"),
     path("db-explorer/query/", views.db_explorer_query, name="db-explorer-query"),
     path("admin/database/", views.admin_database, name="admin-database"),
+    path("admin/branding/", views.admin_branding, name="admin-branding"),
     path("admin/provider/", views.admin_provider, name="admin-provider"),
     path("admin/openrouter/", views.admin_openrouter, name="admin-openrouter"),
     path(

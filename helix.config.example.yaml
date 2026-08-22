@@ -88,6 +88,11 @@ database:
 frontend:
   api_base_url: "http://127.0.0.1:8000"
 
+# Company that uses the app (Settings → General). Logo is an image data URL.
+branding:
+  company_name: ""
+  company_logo_data_url: ""
+
 # Sandbox reuses a pre-installed interpreter — never pip-installs per request.
 sandbox:
   allow_pip_install: false

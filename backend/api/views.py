@@ -25,6 +25,7 @@ from .config_loader import (
     get_active_provider_settings,
     get_agent_display_names,
     get_agent_meta,
+    get_branding,
     get_cursor_settings,
     get_cursor_token,
     get_database_engine,
@@ -37,6 +38,7 @@ from .config_loader import (
     set_agent_disabled,
     update_agent_display_name,
     update_agent_fields,
+    update_branding,
     update_cursor_settings,
     update_database_settings,
     update_openrouter_settings,
@@ -640,6 +642,23 @@ def admin_provider(request: HttpRequest) -> JsonResponse:
     except ValueError as exc:
         return _error(str(exc))
     return JsonResponse(get_active_provider_settings() | {"provider": saved})
+
+
+@csrf_exempt
+@require_http_methods(["GET", "PUT"])
+def admin_branding(request: HttpRequest) -> JsonResponse:
+    if request.method == "GET":
+        return JsonResponse({"branding": get_branding()})
+    try:
+        body = _json_body(request)
+    except ValueError as exc:
+        return _error(str(exc))
+    payload = body.get("branding") if isinstance(body.get("branding"), dict) else body
+    try:
+        branding = update_branding(payload)
+    except ValueError as exc:
+        return _error(str(exc))
+    return JsonResponse({"branding": branding})
 
 
 @csrf_exempt

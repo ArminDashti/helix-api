@@ -70,6 +70,64 @@ def validate_order_column(column: str, columns: list[str] | None = None) -> str:
     return col
 
 
+def _looks_like_id_column(name: str) -> bool:
+    text = (name or "").strip()
+    if not text:
+        return False
+    lower = text.lower()
+    if lower == "id":
+        return True
+    if lower.endswith("_id"):
+        return True
+    if len(text) > 2 and text.endswith(("Id", "ID")):
+        return True
+    return False
+
+
+def prefer_id_order_column(
+    columns: list[Any],
+) -> str:
+    """Pick a default ORDER BY column: PK, then *Id / id, then lowest ordinal."""
+    if not columns:
+        return ""
+
+    metas: list[dict[str, Any]] = []
+    for item in columns:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            metas.append(
+                {
+                    "name": name,
+                    "description": str(item.get("description") or ""),
+                    "ordinal": item.get("ordinal"),
+                }
+            )
+        else:
+            name = str(item or "").strip()
+            if name:
+                metas.append({"name": name, "description": "", "ordinal": None})
+
+    if not metas:
+        return ""
+
+    for meta in metas:
+        if meta["description"].strip().upper() == "PRIMARY KEY":
+            return meta["name"]
+
+    for meta in metas:
+        if _looks_like_id_column(meta["name"]):
+            return meta["name"]
+
+    with_ordinal = [m for m in metas if isinstance(m.get("ordinal"), (int, float))]
+    if with_ordinal:
+        with_ordinal.sort(key=lambda m: int(m["ordinal"]))
+        return with_ordinal[0]["name"]
+
+    return metas[0]["name"]
+
+
 def cell_value(value: Any) -> Any:
     if value is None:
         return None

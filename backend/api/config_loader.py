@@ -798,6 +798,56 @@ def update_provider(provider: str) -> str:
     return value
 
 
+# Max data-URL length for company logo (~300KB binary as base64).
+_MAX_BRANDING_LOGO_CHARS = 400_000
+
+
+def get_branding() -> dict[str, str]:
+    data = load_config()
+    raw = data.get("branding") if isinstance(data.get("branding"), dict) else {}
+    name = raw.get("company_name")
+    logo = raw.get("company_logo_data_url")
+    return {
+        "company_name": "" if name in (None, "") else str(name).strip(),
+        "company_logo_data_url": (
+            ""
+            if logo in (None, "")
+            else str(logo).strip()[:_MAX_BRANDING_LOGO_CHARS]
+        ),
+    }
+
+
+def update_branding(payload: dict[str, Any]) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        raise ValueError("branding payload must be an object")
+    current = get_branding()
+    if "company_name" in payload:
+        value = payload.get("company_name")
+        current["company_name"] = (
+            "" if value in (None, "") else str(value).strip()
+        )
+    if "company_logo_data_url" in payload:
+        value = payload.get("company_logo_data_url")
+        if value in (None, ""):
+            current["company_logo_data_url"] = ""
+        else:
+            text = str(value).strip()
+            if text and not text.startswith("data:image/"):
+                raise ValueError(
+                    "company_logo_data_url must be an image data URL or empty"
+                )
+            if len(text) > _MAX_BRANDING_LOGO_CHARS:
+                raise ValueError("company_logo_data_url is too large")
+            current["company_logo_data_url"] = text
+    data = load_config()
+    data["branding"] = {
+        "company_name": current["company_name"],
+        "company_logo_data_url": current["company_logo_data_url"],
+    }
+    save_config(data)
+    return get_branding()
+
+
 def detect_cursor_install() -> dict[str, Any]:
     """Return whether the Cursor desktop app appears installed on this machine."""
     import shutil
